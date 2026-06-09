@@ -1,0 +1,16 @@
+[
+    {
+        "id": 1,
+        "date": "2026-02-10",
+        "title": "Assignment due: Research Paper",
+        "message": "Research Paper for Data Structures is due in 3 days.",
+        "read": false
+    },
+    {
+        "id": 2,
+        "date": "2026-03-05",
+        "title": "Exam scheduled: Calculus",
+        "message": "Midterm exam scheduled for 10 March 2026.",
+        "read": true
+    }
+]

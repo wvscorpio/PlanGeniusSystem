@@ -1,0 +1,16 @@
+[
+  {
+    "id": 1,
+    "date": "2026-01-15",
+    "title": "Assignment: Research Paper",
+    "type": "assignment",
+    "details": "Write the research paper for Data Structures"
+  },
+  {
+    "id": 2,
+    "date": "2026-03-10",
+    "title": "Midterm Exam: Calculus",
+    "type": "exam",
+    "details": "Midterm exam covering chapters 1-6"
+  }
+]
