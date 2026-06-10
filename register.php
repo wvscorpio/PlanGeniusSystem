@@ -3,6 +3,7 @@ include 'dbConn.php';
 session_start();
 $errors = [];
 $message = '';
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $first = trim($_POST['first'] ?? '');
     $last = trim($_POST['last'] ?? '');
@@ -16,22 +17,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (strlen($password) < 8) $errors[] = 'Password must be at least 8 characters.';
     if ($phone === '') $errors[] = 'Telephone is required.';
 
+    //Check whether errors exist
     if (empty($errors)) {
-        try {
-            $stmt = $conn->prepare(
-                'INSERT INTO "Student" ("firstName", "lastName", "email", "password", "phoneNo") VALUES (:first, :last, :email, :password, :phone)'
-            );
-            $stmt->execute([
-                ':first' => $first,
-                ':last' => $last,
-                ':email' => $email,
-                ':password' => password_hash($password, PASSWORD_BCRYPT),
-                ':phone' => $phone,
-            ]);
-            $message = 'Registration successful. You can now log in.';
-        } catch (PDOException $e) {
-            $errors[] = 'Registration failed: ' . $e->getMessage();
+      try {
+        // Check for existing user by email
+        $check = $conn->prepare('SELECT "password" FROM "Student" WHERE "email" = :email');
+        $check->execute([':email' => $email]);
+        $existing = $check->fetch(PDO::FETCH_ASSOC);
+
+        if ($existing) {
+          // If the provided password matches the stored password, treat as duplicate
+          if (password_verify($password, $existing['password'])) {
+            $errors[] = 'An account with this email and password already exists.';
+          } else {
+            $errors[] = 'Email is already registered. Please log in or reset your password.';
+          }
+          // Clear the form state after existing account verification
+          $_POST = [];
+          $first = $last = $email = $phone = $password = '';
+        } else {
+          $stmt = $conn->prepare(
+            'INSERT INTO "Student" ("firstName", "lastName", "email", "password", "phoneNo") VALUES (:first, :last, :email, :password, :phone)'
+          );
+          $stmt->execute([
+            ':first' => $first,
+            ':last' => $last,
+            ':email' => $email,
+            ':password' => password_hash($password, PASSWORD_BCRYPT),
+            ':phone' => $phone,
+          ]);
+          $message = 'Registration successful. You can now log in.';
+          header('Location: login.php');
+          exit;
         }
+      } catch (PDOException $e) {
+        $errors[] = 'Registration failed: ' . $e->getMessage();
+      }
     }
 }
 ?>
@@ -63,13 +84,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     .btn{display:block;width:100%;background:var(--black);color:#fff;padding:14px;border-radius:12px;border:none;font-weight:700;font-size:16px;margin-top:18px;cursor:pointer}
 
     .messages{margin-bottom:12px}
+    .messages{margin-bottom:12px;display:none}
     .error{ background:#ffecec;border:1px solid #f5c2c2;padding:10px;border-radius:8px;color:#6a1b1b;margin-bottom:8px }
     .success{ background:#eef7ff;border:1px solid #c6e0ff;padding:10px;border-radius:8px;color:#0b3a66;margin-bottom:8px }
+
+    /* Toast / popup styles */
+    .toast-container{ position:fixed; top:20px; right:20px; z-index:9999; display:flex; flex-direction:column; gap:10px; align-items:flex-end }
+    .toast{ background:#fff; border-radius:8px; padding:12px 16px; box-shadow:0 6px 18px rgba(20,30,50,0.12); min-width:280px; max-width:380px; color:#0b1720; border-left:6px solid #ccc; display:flex; gap:12px; align-items:flex-start }
+    .toast.success{ border-left-color:#16a34a }
+    .toast.error{ border-left-color:#dc2626 }
+    .toast .close{ margin-left:auto; background:transparent;border:none;color:#667085;font-weight:700;cursor:pointer }
+    .toast .content{ white-space:pre-wrap }
 
     @media (max-width:520px){ .row{ flex-direction:column } .tabbar{ width:100% } }
   </style>
 </head>
 <body>
+  <div id="toast-container" class="toast-container" aria-live="polite"></div>
   <div class="wrap">
     <div class="brand">
       <h1>PlanGenius</h1>
@@ -118,5 +149,52 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     </form>
 
   </div>
+</div>
+
+  <script>
+    // Server-provided messages
+    const serverErrors = <?php echo json_encode(array_values($errors)); ?>;
+    const serverMessage = <?php echo json_encode($message); ?>;
+
+    function createToast(type, html) {
+      const container = document.getElementById('toast-container');
+      if (!container) return;
+      const t = document.createElement('div');
+      t.className = 'toast ' + (type === 'success' ? 'success' : 'error');
+      const content = document.createElement('div');
+      content.className = 'content';
+      content.innerHTML = html;
+      const close = document.createElement('button');
+      close.className = 'close';
+      close.innerText = '×';
+      close.onclick = () => { t.remove(); };
+      t.appendChild(content);
+      t.appendChild(close);
+      container.appendChild(t);
+      // Auto remove after 5s
+      setTimeout(() => { t.remove(); }, 5000);
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      if (serverErrors && serverErrors.length) {
+        const html = serverErrors.map(e => escapeHtml(e)).join('\n');
+        createToast('error', html);
+      }
+      if (serverMessage) {
+        createToast('success', escapeHtml(serverMessage));
+      }
+    });
+
+    function escapeHtml(str) {
+      if (!str) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+  </script>
+
 </body>
 </html>
