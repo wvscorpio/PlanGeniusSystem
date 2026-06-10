@@ -99,6 +99,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       text-align:center;margin-top:12px;color:#9aa0a6;font-size:13px 
     }
 
+    .toast-container{ position:fixed; top:20px; right:20px; z-index:9999; display:flex; flex-direction:column; gap:10px; align-items:flex-end }
+    .toast{ background:#fff; border-radius:8px; padding:12px 16px; box-shadow:0 6px 18px rgba(20,30,50,0.12); min-width:280px; max-width:380px; color:#0b1720; border-left:6px solid #ccc; display:flex; gap:12px; align-items:flex-start }
+    .toast.success{ border-left-color:#16a34a }
+    .toast.error{ border-left-color:#dc2626 }
+    .toast .close{ margin-left:auto; background:transparent;border:none;color:#667085;font-weight:700;cursor:pointer }
+    .toast .content{ white-space:pre-wrap }
+
     @media (max-width:520px){ .tabbar{ width:100%; } }
   </style>
 </head>
@@ -109,14 +116,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       <p>Intelligent Planner for Students</p>
     </div>
 
-    <div class="tabbar">
+    <div id="toast-container" class="toast-container" aria-live="polite"></div>
+  <div class="tabbar">
         <a href="login.php" class="tab active">Login</a>
         <a href="register.php" class="tab">Register</a>
     </div>
-
-    <?php if ($message): ?>
-      <div class="alert"><?= $message ?></div>
-    <?php endif; ?>
 
     <form method="post" action="login.php">
       <label for="email">Email</label>
@@ -130,5 +134,43 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     <div class="footer">Forgot password? Contact your administrator.</div>
   </div>
+
+  <script>
+    const serverMessage = <?php echo json_encode($message); ?>;
+
+    function createToast(type, html) {
+      const container = document.getElementById('toast-container');
+      if (!container) return;
+      const t = document.createElement('div');
+      t.className = 'toast ' + (type === 'success' ? 'success' : 'error');
+      const content = document.createElement('div');
+      content.className = 'content';
+      content.innerHTML = html;
+      const close = document.createElement('button');
+      close.className = 'close';
+      close.innerText = '×';
+      close.onclick = () => { t.remove(); };
+      t.appendChild(content);
+      t.appendChild(close);
+      container.appendChild(t);
+      setTimeout(() => { t.remove(); }, 5000);
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      if (serverMessage) {
+        createToast('error', escapeHtml(serverMessage));
+      }
+    });
+
+    function escapeHtml(str) {
+      if (!str) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+  </script>
 </body>
 </html>
