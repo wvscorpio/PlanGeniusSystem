@@ -49,19 +49,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && strpos($_SERVER['CONTENT_TYPE'] ?? 
         }
 
         try {
-            $sameStmt = $conn->prepare('SELECT 1 FROM "Course" WHERE "semesterID" = :semesterID AND "courseCode" = :courseCode LIMIT 1');
-            $sameStmt->execute([':semesterID' => $semesterID, ':courseCode' => $courseCode]);
+            $sameStmt = $conn->prepare('SELECT 1 FROM "Course" WHERE "semesterID" = :semesterID AND (LOWER("courseCode") = LOWER(:courseCode) OR LOWER("courseName") = LOWER(:courseName)) LIMIT 1');
+            $sameStmt->execute([':semesterID' => $semesterID, ':courseCode' => $courseCode, ':courseName' => $courseName]);
             if ($sameStmt->fetch()) {
-                echo json_encode(['success' => false, 'error' => 'This course already exists in this semester.']);
+                echo json_encode(['success' => false, 'error' => 'A course with this code or name already exists in this semester.']);
                 exit;
             }
 
             $dupStmt = $conn->prepare(
-                'SELECT 1 FROM "Course" c JOIN "SemesterPlan" s ON c."semesterID" = s."semesterID" WHERE s."studentID" = :studentID AND c."courseCode" = :courseCode LIMIT 1'
+                'SELECT 1 FROM "Course" c JOIN "SemesterPlan" s ON c."semesterID" = s."semesterID" WHERE s."studentID" = :studentID AND (LOWER(c."courseCode") = LOWER(:courseCode) OR LOWER(c."courseName") = LOWER(:courseName)) LIMIT 1'
             );
-            $dupStmt->execute([':studentID' => $studentID, ':courseCode' => $courseCode]);
+            $dupStmt->execute([':studentID' => $studentID, ':courseCode' => $courseCode, ':courseName' => $courseName]);
             if ($dupStmt->fetch()) {
-                echo json_encode(['success' => false, 'error' => 'This course already taken. Duplicate courses are not allowed across semesters.']);
+                echo json_encode(['success' => false, 'error' => 'This course code or name already exists in your plan. Duplicate courses are not allowed across semesters.']);
                 exit;
             }
 
@@ -109,6 +109,132 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && strpos($_SERVER['CONTENT_TYPE'] ?? 
             exit;
         } catch (PDOException $e) {
             echo json_encode(['success' => false, 'error' => 'Failed to delete semester: ' . $e->getMessage()]);
+            exit;
+        }
+    }
+
+    // ACTION: UPDATE SEMESTER
+    if ($action === 'updateSemester') {
+        $semesterID = intval($input['semesterID'] ?? 0);
+        $semesterName = trim($input['semesterName'] ?? '');
+        $startDate = trim($input['startDate'] ?? '');
+        $endDate = trim($input['endDate'] ?? '');
+
+        if (!$semesterID || $semesterName === '' || $startDate === '' || $endDate === '') {
+            echo json_encode(['success' => false, 'error' => 'All semester fields are required']);
+            exit;
+        }
+
+        try {
+            $semesterStmt = $conn->prepare('SELECT * FROM "SemesterPlan" WHERE "semesterID" = :semesterID AND "studentID" = :studentID');
+            $semesterStmt->execute([':semesterID' => $semesterID, ':studentID' => $studentID]);
+            $semester = $semesterStmt->fetch(PDO::FETCH_ASSOC);
+            if (!$semester) {
+                echo json_encode(['success' => false, 'error' => 'Semester not found']);
+                exit;
+            }
+
+            $start = new DateTime($startDate);
+            $end = new DateTime($endDate);
+            if ($start > $end) {
+                echo json_encode(['success' => false, 'error' => 'Start date must be before or equal to end date']);
+                exit;
+            }
+
+            $checkName = $conn->prepare('SELECT 1 FROM "SemesterPlan" WHERE "studentID" = :studentID AND "semesterName" = :semesterName AND "semesterID" <> :semesterID LIMIT 1');
+            $checkName->execute([':studentID' => $studentID, ':semesterName' => $semesterName, ':semesterID' => $semesterID]);
+            if ($checkName->fetch()) {
+                echo json_encode(['success' => false, 'error' => 'A semester with that name already exists']);
+                exit;
+            }
+
+            $overlapStmt = $conn->prepare(
+                'SELECT 1 FROM "SemesterPlan" WHERE "studentID" = :studentID AND "semesterID" <> :semesterID AND NOT ("endDate" < :startDate OR "startDate" > :endDate) LIMIT 1'
+            );
+            $overlapStmt->execute([
+                ':studentID' => $studentID,
+                ':semesterID' => $semesterID,
+                ':startDate' => $startDate,
+                ':endDate' => $endDate
+            ]);
+            if ($overlapStmt->fetch()) {
+                echo json_encode(['success' => false, 'error' => 'Semester dates overlap an existing semester']);
+                exit;
+            }
+
+            $updateStmt = $conn->prepare(
+                'UPDATE "SemesterPlan" SET "semesterName" = :semesterName, "startDate" = :startDate, "endDate" = :endDate WHERE "semesterID" = :semesterID'
+            );
+            $updateStmt->execute([
+                ':semesterName' => $semesterName,
+                ':startDate' => $startDate,
+                ':endDate' => $endDate,
+                ':semesterID' => $semesterID
+            ]);
+
+            $today = new DateTime('today');
+            $status = 'Upcoming';
+            if ($today < $start) {
+                $status = 'Upcoming';
+            } elseif ($today > $end) {
+                $status = 'Inactive';
+            } else {
+                $status = 'Active';
+            }
+
+            echo json_encode([
+                'success' => true,
+                'semester' => [
+                    'semesterID' => $semesterID,
+                    'semesterName' => $semesterName,
+                    'startDate' => $startDate,
+                    'endDate' => $endDate,
+                    'status' => $status
+                ]
+            ]);
+            exit;
+        } catch (PDOException $e) {
+            echo json_encode(['success' => false, 'error' => 'Failed to update semester: ' . $e->getMessage()]);
+            exit;
+        }
+    }
+
+    // ACTION: UPDATE COURSE
+    if ($action === 'updateCourse') {
+        $courseID = intval($input['courseID'] ?? 0);
+        $courseCode = trim($input['courseCode'] ?? '');
+        $courseName = trim($input['courseName'] ?? '');
+
+        if (!$courseID || $courseCode === '' || $courseName === '') {
+            echo json_encode(['success' => false, 'error' => 'All course fields are required']);
+            exit;
+        }
+
+        try {
+            $courseStmt = $conn->prepare('SELECT c.* FROM "Course" c JOIN "SemesterPlan" s ON c."semesterID" = s."semesterID" WHERE c."courseID" = :courseID AND s."studentID" = :studentID');
+            $courseStmt->execute([':courseID' => $courseID, ':studentID' => $studentID]);
+            $course = $courseStmt->fetch(PDO::FETCH_ASSOC);
+            if (!$course) {
+                echo json_encode(['success' => false, 'error' => 'Course not found']);
+                exit;
+            }
+
+            $dupStmt = $conn->prepare(
+                'SELECT 1 FROM "Course" c JOIN "SemesterPlan" s ON c."semesterID" = s."semesterID" WHERE s."studentID" = :studentID AND (LOWER(c."courseCode") = LOWER(:courseCode) OR LOWER(c."courseName") = LOWER(:courseName)) AND c."courseID" <> :courseID LIMIT 1'
+            );
+            $dupStmt->execute([':studentID' => $studentID, ':courseCode' => $courseCode, ':courseName' => $courseName, ':courseID' => $courseID]);
+            if ($dupStmt->fetch()) {
+                echo json_encode(['success' => false, 'error' => 'This course code or name already exists in your plan']);
+                exit;
+            }
+
+            $updateCourse = $conn->prepare('UPDATE "Course" SET "courseCode" = :courseCode, "courseName" = :courseName WHERE "courseID" = :courseID');
+            $updateCourse->execute([':courseCode' => $courseCode, ':courseName' => $courseName, ':courseID' => $courseID]);
+
+            echo json_encode(['success' => true, 'course' => ['courseID' => $courseID, 'courseCode' => $courseCode, 'courseName' => $courseName]]);
+            exit;
+        } catch (PDOException $e) {
+            echo json_encode(['success' => false, 'error' => 'Failed to update course: ' . $e->getMessage()]);
             exit;
         }
     }
@@ -283,6 +409,52 @@ try {
         </div>
     </div>
 
+    <div class="modal" id="editSemesterModal">
+        <div class="modal-header">
+            <h2 class="modal-title">Edit Semester</h2>
+            <button class="close-modal-btn" onclick="closeModal('editSemesterModal')"><i class="ph ph-x"></i></button>
+        </div>
+        <div class="modal-body">
+            <form id="editSemesterForm" onsubmit="handleEditSemester(event)">
+                <input type="hidden" id="editSemesterId">
+                <div class="form-group">
+                    <label>Semester Name</label>
+                    <input id="editSemesterName" name="semesterName" type="text" class="form-control" required>
+                </div>
+                <div class="form-group">
+                    <label>Start Date</label>
+                    <input id="editStartDate" name="startDate" type="date" class="form-control" required>
+                </div>
+                <div class="form-group">
+                    <label>End Date</label>
+                    <input id="editEndDate" name="endDate" type="date" class="form-control" required>
+                </div>
+                <button type="submit" class="btn btn-primary btn-block" id="editSemesterBtn">Save Changes</button>
+            </form>
+        </div>
+    </div>
+
+    <div class="modal" id="editCourseModal">
+        <div class="modal-header">
+            <h2 class="modal-title">Edit Course</h2>
+            <button class="close-modal-btn" onclick="closeModal('editCourseModal')"><i class="ph ph-x"></i></button>
+        </div>
+        <div class="modal-body">
+            <form id="editCourseForm" onsubmit="handleEditCourse(event)">
+                <input type="hidden" id="editCourseId">
+                <div class="form-group">
+                    <label>Course Code</label>
+                    <input id="editCourseCode" type="text" class="form-control" required>
+                </div>
+                <div class="form-group">
+                    <label>Course Name</label>
+                    <input id="editCourseName" type="text" class="form-control" required>
+                </div>
+                <button type="submit" class="btn btn-primary btn-block" id="editCourseBtn">Save Changes</button>
+            </form>
+        </div>
+    </div>
+
     <script>
         const existingSemesters = <?php echo json_encode($semesters); ?>;
 
@@ -372,7 +544,10 @@ try {
                                 <div class="course-code">${escapeHtml(course.courseCode)}</div>
                                 <div class="course-name">${escapeHtml(course.courseName.toUpperCase())}</div>
                             </div>
-                            <button class="btn btn-icon text-muted" onclick="deleteCourse('course-${course.courseID}', '${semId}')"><i class="ph ph-trash"></i></button>
+                            <div style="display:flex; gap:8px;">
+                                <button class="btn btn-icon text-muted" onclick="openEditCourse('course-${course.courseID}', '${semId}')"><i class="ph ph-pencil"></i></button>
+                                <button class="btn btn-icon text-muted" onclick="deleteCourse('course-${course.courseID}', '${semId}')"><i class="ph ph-trash"></i></button>
+                            </div>
                         </div>
                     `;
                 });
@@ -388,6 +563,7 @@ try {
                         </div>
                         <div class="semester-actions">
                             <span class="status-badge ${statusClass}">${escapeHtml(status)}</span>
+                            <button class="btn btn-outline btn-icon" onclick="openEditSemesterModal('${semId}')"><i class="ph ph-pencil"></i></button>
                             <button class="btn btn-danger btn-icon" onclick="deleteSemester('${semId}')"><i class="ph ph-trash"></i></button>
                         </div>
                     </div>
@@ -411,6 +587,131 @@ try {
             const html = buildSemesterHtml(semester);
             document.getElementById('semestersList').insertAdjacentHTML('beforeend', html);
             document.getElementById('emptyState').style.display = 'none';
+        }
+
+        function openEditSemesterModal(semId) {
+            const semester = existingSemesters.find(s => 'semester-' + s.semesterID === semId);
+            if (!semester) return;
+            document.getElementById('editSemesterId').value = semId;
+            document.getElementById('editSemesterName').value = semester.semesterName;
+            document.getElementById('editStartDate').value = semester.startDate;
+            document.getElementById('editEndDate').value = semester.endDate;
+            openModal('editSemesterModal');
+        }
+
+        async function handleEditSemester(e) {
+            e.preventDefault();
+            const btn = document.getElementById('editSemesterBtn');
+            const semId = document.getElementById('editSemesterId').value;
+            const semesterID = parseInt(semId.replace('semester-', ''), 10);
+            const semesterName = document.getElementById('editSemesterName').value;
+            const startDate = document.getElementById('editStartDate').value;
+            const endDate = document.getElementById('editEndDate').value;
+
+            btn.innerText = 'Saving...';
+            btn.disabled = true;
+
+            try {
+                const response = await fetch('academic_structure.php', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        action: 'updateSemester',
+                        semesterID,
+                        semesterName,
+                        startDate,
+                        endDate
+                    })
+                });
+                const data = await response.json();
+                if (!data.success) throw new Error(data.error || 'Unable to update semester');
+
+                const semesterIndex = existingSemesters.findIndex(s => s.semesterID === semesterID);
+                if (semesterIndex !== -1) {
+                    const courses = existingSemesters[semesterIndex].courses || [];
+                    existingSemesters[semesterIndex] = { ...existingSemesters[semesterIndex], ...data.semester, courses };
+                }
+
+                const card = document.getElementById(semId);
+                if (card) {
+                    card.querySelector('.semester-title').innerText = data.semester.semesterName;
+                    card.querySelector('.semester-dates').innerText = `${data.semester.startDate} to ${data.semester.endDate}`;
+                    const badge = card.querySelector('.status-badge');
+                    badge.innerText = data.semester.status;
+                    badge.className = 'status-badge ' + getStatusClass(data.semester.status);
+                }
+
+                closeModal('editSemesterModal');
+                showNotification('Semester updated successfully!');
+            } catch (err) {
+                console.error(err);
+                showNotification(err.message || 'Error updating semester', 'error');
+            } finally {
+                btn.innerText = 'Save Changes';
+                btn.disabled = false;
+            }
+        }
+
+        function openEditCourse(courseId, semId) {
+            const semester = existingSemesters.find(s => 'semester-' + s.semesterID === semId);
+            if (!semester || !semester.courses) return;
+            const course = semester.courses.find(c => 'course-' + c.courseID === courseId);
+            if (!course) return;
+            document.getElementById('editCourseId').value = courseId;
+            document.getElementById('editCourseCode').value = course.courseCode;
+            document.getElementById('editCourseName').value = course.courseName;
+            openModal('editCourseModal');
+        }
+
+        async function handleEditCourse(e) {
+            e.preventDefault();
+            const btn = document.getElementById('editCourseBtn');
+            const courseId = document.getElementById('editCourseId').value;
+            const courseID = parseInt(courseId.replace('course-', ''), 10);
+            const courseCode = document.getElementById('editCourseCode').value;
+            const courseName = document.getElementById('editCourseName').value;
+
+            btn.innerText = 'Saving...';
+            btn.disabled = true;
+
+            try {
+                const response = await fetch('academic_structure.php', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        action: 'updateCourse',
+                        courseID,
+                        courseCode,
+                        courseName
+                    })
+                });
+                const data = await response.json();
+                if (!data.success) throw new Error(data.error || 'Unable to update course');
+
+                const courseEl = document.getElementById(courseId);
+                if (courseEl) {
+                    courseEl.querySelector('.course-code').innerText = data.course.courseCode;
+                    courseEl.querySelector('.course-name').innerText = data.course.courseName.toUpperCase();
+                }
+
+                existingSemesters.forEach(semester => {
+                    if (!semester.courses) return;
+                    const found = semester.courses.find(c => c.courseID === courseID);
+                    if (found) {
+                        found.courseCode = data.course.courseCode;
+                        found.courseName = data.course.courseName;
+                    }
+                });
+
+                closeModal('editCourseModal');
+                showNotification('Course updated successfully!');
+            } catch (err) {
+                console.error(err);
+                showNotification(err.message || 'Error updating course', 'error');
+            } finally {
+                btn.innerText = 'Save Changes';
+                btn.disabled = false;
+            }
         }
 
         document.addEventListener('DOMContentLoaded', () => {
@@ -581,7 +882,10 @@ try {
                             <div class="course-code">${escapeHtml(data.course.courseCode)}</div>
                             <div class="course-name">${escapeHtml(data.course.courseName.toUpperCase())}</div>
                         </div>
-                        <button class="btn btn-icon text-muted" onclick="deleteCourse('${courseId}', '${semId}')"><i class="ph ph-trash"></i></button>
+                        <div style="display:flex; gap:8px;">
+                            <button class="btn btn-icon text-muted" onclick="openEditCourse('${courseId}', '${semId}')"><i class="ph ph-pencil"></i></button>
+                            <button class="btn btn-icon text-muted" onclick="deleteCourse('${courseId}', '${semId}')"><i class="ph ph-trash"></i></button>
+                        </div>
                     </div>
                 `;
                 coursesList.insertAdjacentHTML('beforeend', courseHtml);
