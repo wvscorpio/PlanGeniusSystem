@@ -508,6 +508,26 @@ body {
     color: #0369a1;
 }
 
+/*Badge Colors Assignments*/
+/* Assignment Badges */
+.badge { 
+    display: inline-flex; 
+    align-items: center; 
+    padding: 4px 10px; 
+    border-radius: 20px; 
+    font-size: 12px; 
+    font-weight: 600; 
+}
+.badge-priority-high { background-color: #fee2e2; color: #dc2626; }
+.badge-priority-medium { background-color: #fef3c7; color: #ca8a04; }
+.badge-priority-low { background-color: #dcfce7; color: #16a34a; }
+.badge-type { background-color: #e0f2fe; color: #0284c7; }
+
+/* Dynamic Task Status Colors */
+.badge-status-not-started { background-color: #fee2e2; color: #dc2626; } /* Red */
+.badge-status-ongoing { background-color: #ede9fe; color: #6b21a8; }     /* Purple */
+.badge-status-completed { background-color: #dcfce7; color: #16a34a; }   /* Green */
+
 /* Course Items */
 .course-item {
     display: flex;
