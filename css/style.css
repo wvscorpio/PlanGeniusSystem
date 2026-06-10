@@ -497,7 +497,8 @@ body {
     color: #166534;
 }
 
-.status-expired {
+.status-expired,
+.status-inactive {
     background-color: #f1f5f9;
     color: #475569;
 }
@@ -658,9 +659,24 @@ body {
     transform: translateX(0);
 }
 
-.notification-toast i {
-    color: #10b981;
+.notification-toast i {    
     font-size: 20px;
+}
+
+.notification-toast.success {
+    background-color: #dcfce7;
+    color: #065f46;
+}
+.notification-toast.success i {
+    color: #059669;
+}
+
+.notification-toast.error {
+    background-color: #fee2e2;
+    color: #7f1d1d;
+}
+.notification-toast.error i {
+    color: #ef4444;
 }
 
 @media (max-width: 1024px) {
