@@ -2,6 +2,13 @@
 include 'dbConn.php';
 session_start();
 $message = '';
+$successMessage = '';
+
+// Check for success message from password reset
+if (isset($_SESSION['success_message'])) {
+    $successMessage = $_SESSION['success_message'];
+    unset($_SESSION['success_message']);
+}
 
 // 1. If the student is already logged in, redirect them directly to the dashboard
 if (isset($_SESSION['studentID'])) {
@@ -140,11 +147,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       <button type="submit" class="btn">Login</button>
     </form>
 
-    <div class="footer">Forgot password? Contact your administrator.</div>
+    <div class="footer">Forgot password? <a href="forgot_password.php" style="color: #3b82f6; text-decoration: none; font-weight: 500;">Reset here</a></div>
   </div>
 
   <script>
     const serverMessage = <?php echo json_encode($message); ?>;
+    const successMessage = <?php echo json_encode($successMessage); ?>;
 
     function createToast(type, html) {
       const container = document.getElementById('toast-container');
@@ -167,6 +175,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     document.addEventListener('DOMContentLoaded', () => {
       if (serverMessage) {
         createToast('error', escapeHtml(serverMessage));
+      }
+      if (successMessage) {                      
+        createToast('success', successMessage);  
       }
     });
 
