@@ -1,6 +1,7 @@
 <?php
 session_start();
 header('Content-Type: application/json');
+include 'dbConn.php'; // Included to check the database for duplicates
 
 $studentID = $_SESSION['studentID'] ?? null;
 if (!$studentID) {
@@ -33,15 +34,33 @@ if ($file['size'] > $maxFileSize) {
 // Check MIME type
 $mimeType = mime_content_type($file['tmp_name']);
 if ($mimeType !== 'application/pdf') {
-    // Additional PDF check using file signature
-    $handle = fopen($file['tmp_name'], 'r');
-    $header = fread($handle, 4);
-    fclose($handle);
+    echo json_encode(['success' => false, 'error' => 'Only PDF files are allowed.']);
+    exit;
+}
+
+// --- NEW: DUPLICATE PDF FILE HASH VALIDATION ---
+$pdfHash = hash_file('sha256', $file['tmp_name']);
+
+try {
+    $hashCheck = $conn->prepare('
+        SELECT 1 FROM "Assignment" a
+        JOIN "Course" c ON a."courseID" = c."courseID"
+        JOIN "SemesterPlan" s ON c."semesterID" = s."semesterID"
+        WHERE s."studentID" = :studentID AND a."pdfHash" = :pdfHash
+        LIMIT 1
+    ');
+    $hashCheck->execute([
+        ':studentID' => $studentID,
+        ':pdfHash' => $pdfHash
+    ]);
     
-    if ($header !== '%PDF') {
-        echo json_encode(['success' => false, 'error' => 'Invalid PDF file format']);
+    if ($hashCheck->fetch()) {
+        echo json_encode(['success' => false, 'error' => 'This assessment document has already been uploaded.']);
         exit;
     }
+} catch (PDOException $e) {
+    echo json_encode(['success' => false, 'error' => 'Database error during file validation.']);
+    exit;
 }
 
 // Create uploads directory
@@ -81,17 +100,24 @@ if (!$extractedData || !isset($extractedData['success'])) {
     unlink($filePath);
     echo json_encode([
         'success' => false,
-        'error' => $extractedData['error'] ?? 'Failed to extract PDF content',
-        'filePath' => $filename
+        'error' => $extractedData['error'] ?? 'Failed to extract PDF content.',
+        'raw_output' => $output // Optional debug info
     ]);
     exit;
 }
 
-// Return successfully extracted data with file path
+if (!$extractedData['success']) {
+    unlink($filePath);
+    echo json_encode([
+        'success' => false,
+        'error' => $extractedData['error']
+    ]);
+    exit;
+}
+
+// Return success with extracted data and filename
 echo json_encode([
     'success' => true,
-    'filePath' => $filename,
-    'extractedData' => $extractedData['data'] ?? null
+    'extractedData' => $extractedData['data'],
+    'filePath' => $filename
 ]);
-exit;
-?>
