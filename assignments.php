@@ -41,10 +41,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && strpos($_SERVER['CONTENT_TYPE'] ?? 
         $taskStatus = trim($input['taskStatus'] ?? 'Not Started');
         $assignmentType = trim($input['assignmentType'] ?? 'Assignment');
         $subTasks = trim($input['subTasks'] ?? '');
-        $pdfFile = trim($input['pdfFile'] ?? null);
+        $pdfFile = trim($input['pdfFile'] ?? '');
+        $pdfHash = null;
 
         if ($assignmentTitle === '' || !$courseID || $dueDate === '') {
             echo json_encode(['success' => false, 'error' => 'Title, course, and due date are required']);
+            exit;
+        }
+
+        // --- NEW: DUE DATE VALIDATION ---
+        try {
+            $currentDate = new DateTime('today');
+            $assignmentDate = new DateTime($dueDate);
+            if ($assignmentDate < $currentDate) {
+                echo json_encode(['success' => false, 'error' => 'The assignment due date has already passed. Please upload a valid upcoming assignment.']);
+                exit;
+            }
+        } catch (Exception $e) {
+            echo json_encode(['success' => false, 'error' => 'Invalid date format.']);
             exit;
         }
 
@@ -60,11 +74,54 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && strpos($_SERVER['CONTENT_TYPE'] ?? 
                 exit;
             }
 
+            if ($pdfFile !== '') {
+                $filePath = __DIR__ . '/uploads/assignments/' . $pdfFile; 
+                if (file_exists($filePath)) {
+                    $pdfHash = hash_file('sha256', $filePath);
+                    
+                    $hashCheck = $conn->prepare('
+                        SELECT 1 FROM "Assignment" a
+                        JOIN "Course" c ON a."courseID" = c."courseID"
+                        JOIN "SemesterPlan" s ON c."semesterID" = s."semesterID"
+                        WHERE s."studentID" = :studentID AND a."pdfHash" = :pdfHash
+                        LIMIT 1
+                    ');
+                    $hashCheck->execute([':studentID' => $studentID, ':pdfHash' => $pdfHash]);
+                    if ($hashCheck->fetch()) {
+                        echo json_encode(['success' => false, 'error' => 'This assessment document has already been uploaded.']);
+                        exit;
+                    }
+                }
+            }
+
+            // DUPLICATE RECORD VALIDATION
+            $dupCheck = $conn->prepare('
+                SELECT 1 FROM "Assignment" a
+                JOIN "Course" c ON a."courseID" = c."courseID"
+                JOIN "SemesterPlan" s ON c."semesterID" = s."semesterID"
+                WHERE s."studentID" = :studentID
+                  AND a."courseID" = :courseID
+                  AND LOWER(a."assignmentTitle") = LOWER(:assignmentTitle)
+                  AND LOWER(a."assignmentType") = LOWER(:assignmentType)
+                LIMIT 1
+            ');
+            $dupCheck->execute([
+                ':studentID' => $studentID,
+                ':courseID' => $courseID,
+                ':assignmentTitle' => $assignmentTitle,
+                ':assignmentType' => $assignmentType
+            ]);
+            
+            if ($dupCheck->fetch()) {
+                echo json_encode(['success' => false, 'error' => 'Duplicate detected: An assessment with this title and type already exists for this course.']);
+                exit;
+            }
+
             $priorityLevel = calculatePriority($dueDate);
 
             $stmt = $conn->prepare('
-                INSERT INTO "Assignment" ("courseID", "assignmentTitle", "dueDate", "taskStatus", "priorityLevel", "pdfFile", "assignmentType", "subTasks")
-                VALUES (:courseID, :assignmentTitle, :dueDate, :taskStatus, :priorityLevel, :pdfFile, :assignmentType, :subTasks)
+                INSERT INTO "Assignment" ("courseID", "assignmentTitle", "dueDate", "taskStatus", "priorityLevel", "pdfFile", "pdfHash", "assignmentType", "subTasks")
+                VALUES (:courseID, :assignmentTitle, :dueDate, :taskStatus, :priorityLevel, :pdfFile, :pdfHash, :assignmentType, :subTasks)
             ');
             $stmt->execute([
                 ':courseID' => $courseID,
@@ -72,7 +129,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && strpos($_SERVER['CONTENT_TYPE'] ?? 
                 ':dueDate' => $dueDate,
                 ':taskStatus' => $taskStatus,
                 ':priorityLevel' => $priorityLevel,
-                ':pdfFile' => $pdfFile,
+                ':pdfFile' => $pdfFile === '' ? null : $pdfFile,
+                ':pdfHash' => $pdfHash,
                 ':assignmentType' => $assignmentType,
                 ':subTasks' => $subTasks
             ]);
@@ -80,7 +138,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && strpos($_SERVER['CONTENT_TYPE'] ?? 
             echo json_encode(['success' => true]);
             exit;
         } catch (PDOException $e) {
-            echo json_encode(['success' => false, 'error' => 'Failed to add assignment']);
+            echo json_encode(['success' => false, 'error' => 'Failed to add assessment.']);
             exit;
         }
     }
@@ -99,6 +157,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && strpos($_SERVER['CONTENT_TYPE'] ?? 
             exit;
         }
 
+        // --- NEW: DUE DATE VALIDATION ---
+        try {
+            $currentDate = new DateTime('today');
+            $assignmentDate = new DateTime($dueDate);
+            if ($assignmentDate < $currentDate) {
+                echo json_encode(['success' => false, 'error' => 'The assignment due date has already passed. Please upload a valid upcoming assignment.']);
+                exit;
+            }
+        } catch (Exception $e) {
+            echo json_encode(['success' => false, 'error' => 'Invalid date format.']);
+            exit;
+        }
+
         try {
             $check = $conn->prepare('
                 SELECT 1 FROM "Assignment" a
@@ -109,6 +180,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && strpos($_SERVER['CONTENT_TYPE'] ?? 
             $check->execute([':assignmentID' => $assignmentID, ':studentID' => $studentID]);
             if (!$check->fetch()) {
                 echo json_encode(['success' => false, 'error' => 'Assignment not found or unauthorized']);
+                exit;
+            }
+
+            // DUPLICATE RECORD VALIDATION (on edit)
+            $dupCheck = $conn->prepare('
+                SELECT 1 FROM "Assignment" a
+                WHERE a."assignmentID" != :assignmentID
+                  AND a."courseID" = (SELECT "courseID" FROM "Assignment" WHERE "assignmentID" = :assignmentID)
+                  AND LOWER(a."assignmentTitle") = LOWER(:assignmentTitle)
+                  AND LOWER(a."assignmentType") = LOWER(:assignmentType)
+                LIMIT 1
+            ');
+            $dupCheck->execute([
+                ':assignmentID' => $assignmentID,
+                ':assignmentTitle' => $assignmentTitle,
+                ':assignmentType' => $assignmentType
+            ]);
+            
+            if ($dupCheck->fetch()) {
+                echo json_encode(['success' => false, 'error' => 'Duplicate detected: Another assessment with this title and type already exists for this course.']);
                 exit;
             }
 
@@ -213,9 +304,11 @@ try {
     $errors[] = 'Failed to fetch courses.';
 }
 
-// Fetch Assignments
+// Fetch Assignments and Categorize into Active vs Completed
 $assignments = [];
-$groupedAssignments = [];
+$activeGrouped = [];
+$completedGrouped = [];
+
 try {
     $stmt = $conn->prepare('
         SELECT a.*, c."courseCode", c."courseName"
@@ -230,10 +323,14 @@ try {
     
     foreach ($assignments as $a) {
         $courseHeader = $a['courseCode'] . ' - ' . $a['courseName'];
-        if (!isset($groupedAssignments[$courseHeader])) {
-            $groupedAssignments[$courseHeader] = [];
+        
+        if ($a['taskStatus'] === 'Completed') {
+            if (!isset($completedGrouped[$courseHeader])) $completedGrouped[$courseHeader] = [];
+            $completedGrouped[$courseHeader][] = $a;
+        } else {
+            if (!isset($activeGrouped[$courseHeader])) $activeGrouped[$courseHeader] = [];
+            $activeGrouped[$courseHeader][] = $a;
         }
-        $groupedAssignments[$courseHeader][] = $a;
     }
 } catch (PDOException $e) {
     $errors[] = 'Failed to fetch assignments.';
@@ -249,7 +346,6 @@ try {
     <link rel="stylesheet" href="css/style.css">
     <script src="https://unpkg.com/@phosphor-icons/web"></script>
     <style>
-        /* Specific Layout Styles not covered by global style.css */
         .filter-menu { display: flex; gap: 10px; margin-bottom: 20px; overflow-x: auto; padding-bottom: 5px; }
         .filter-pill { padding: 8px 16px; border-radius: 20px; font-size: 14px; font-weight: 500; cursor: pointer; background: #f1f5f9; color: #475569; border: 1px solid transparent; transition: all 0.2s ease; white-space: nowrap; }
         .filter-pill:hover { background: #e2e8f0; }
@@ -257,11 +353,21 @@ try {
 
         .course-group { margin-bottom: 30px; }
         .course-group-title { font-size: 18px; font-weight: 700; color: #1e293b; padding-bottom: 10px; margin-bottom: 15px; border-bottom: 2px solid #e2e8f0; }
-        .assignment-item { background-color: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; margin-bottom: 16px; transition: box-shadow 0.2s; display: block; }
+        
+        .assignment-item { background-color: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; margin-bottom: 16px; transition: all 0.3s ease; display: block; }
         .assignment-item:hover { box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); }
-        .assignment-header { display: flex; justify-content: space-between; align-items: flex-start; }
+        
+        /* Completed Card UI Styling */
+        .completed-card { background-color: #f8fafc; border-color: #cbd5e1; opacity: 0.85; }
+        .completed-card .assignment-title { text-decoration: line-through; color: #94a3b8; }
+        .completed-card .assignment-meta { color: #94a3b8; }
+        
+        .completed-section-title { font-size: 18px; font-weight: 700; color: #64748b; margin-bottom: 20px; display: flex; align-items: center; gap: 8px; padding-bottom: 10px; border-bottom: 2px dashed #e2e8f0; }
+
+        .assignment-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+        .main-checkbox { width: 22px; height: 22px; cursor: pointer; accent-color: #10b981; margin-top: 2px; flex-shrink: 0; }
         .assignment-info { flex: 1; }
-        .assignment-title { font-size: 16px; font-weight: 600; margin-bottom: 4px; }
+        .assignment-title { font-size: 16px; font-weight: 600; margin-bottom: 4px; transition: all 0.3s ease;}
         .assignment-meta { font-size: 13px; color: #7b7f87; margin-bottom: 8px; }
         .assignment-badges { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px;}
         
@@ -283,7 +389,6 @@ try {
         .tab-btn.active { color: #3b82f6; border-bottom-color: #3b82f6; }
         .disabled-section { opacity: 0.5; pointer-events: none; filter: grayscale(1); transition: 0.3s; }
 
-        /* Modern Upload UI Styles */
         .upload-card { border: 1px solid #e2e8f0; border-radius: 12px; padding: 24px; background: #fff; }
         .drop-zone { border: 2px dashed #cbd5e1; border-radius: 8px; padding: 40px 20px; text-align: center; cursor: pointer; transition: all 0.3s ease; background: #f8fafc; }
         .drop-zone:hover, .drop-zone.dragover { background: #f1f5f9; border-color: #3b82f6; }
@@ -318,7 +423,7 @@ try {
         <div class="dashboard-container">
             <div class="page-header flex-between">
                 <div>
-                    <h1 class="page-title">Assignments & Assessments</h1>
+                    <h1 class="page-title">Assignments Management</h1>
                     <p class="page-subtitle">Manage your coursework and track progress</p>
                 </div>
                 <button class="btn btn-primary" onclick="openModal('addAssignmentModal')">
@@ -329,9 +434,12 @@ try {
             <?php if (count($assignments) > 0): ?>
             <div class="filter-menu">
                 <button class="filter-pill active" onclick="filterTasks('All', this)">All</button>
-                <button class="filter-pill" onclick="filterTasks('High', this)">High Priority</button>
-                <button class="filter-pill" onclick="filterTasks('Medium', this)">Medium Priority</button>
-                <button class="filter-pill" onclick="filterTasks('Low', this)">Low Priority</button>
+                <button class="filter-pill" onclick="filterTasks('Not Started', this)">Not Started</button>
+                <button class="filter-pill" onclick="filterTasks('Ongoing', this)">Ongoing</button>
+                <button class="filter-pill" onclick="filterTasks('Completed', this)">Completed</button>
+                <button class="filter-pill" onclick="filterTasks('High Priority', this)">High Priority</button>
+                <button class="filter-pill" onclick="filterTasks('Medium Priority', this)">Medium Priority</button>
+                <button class="filter-pill" onclick="filterTasks('Low Priority', this)">Low Priority</button>
             </div>
             <?php endif; ?>
 
@@ -341,91 +449,112 @@ try {
             </div>
 
             <div id="assignmentsList">
-                <?php foreach ($groupedAssignments as $courseHeader => $courseAssignments): ?>
-                    <div class="course-group">
-                        <h3 class="course-group-title"><i class="ph ph-books"></i> <?= htmlspecialchars($courseHeader) ?></h3>
+                
+                <?php foreach (['active' => $activeGrouped, 'completed' => $completedGrouped] as $sectionType => $group): ?>
+                    <?php if (empty($group)) continue; ?>
+                    
+                    <div id="<?= $sectionType === 'active' ? 'activeSection' : 'completedSection' ?>" style="<?= $sectionType === 'completed' ? 'margin-top: 40px;' : '' ?>">
                         
-                        <?php foreach ($courseAssignments as $assignment): ?>
-                            <?php 
-                                $priorityClass = 'badge-priority-' . strtolower($assignment['priorityLevel']); 
-                                
-                                // Parse Subtasks
-                                $subtaskList = array_filter(array_map('trim', explode("\n", $assignment['subTasks'] ?? '')));
-                                $totalSub = count($subtaskList);
-                                $completedSub = 0;
-                                $parsedSubtasks = [];
-                                
-                                foreach ($subtaskList as $idx => $task) {
-                                    $isChecked = false;
-                                    if (preg_match('/^\[(x|X)\]\s*(.*)/', $task, $matches)) {
-                                        $isChecked = true;
-                                        $completedSub++;
-                                        $taskText = $matches[2];
-                                    } elseif (preg_match('/^\[\s*\]\s*(.*)/', $task, $matches)) {
-                                        $taskText = $matches[1];
-                                    } else {
-                                        $taskText = $task;
-                                    }
-                                    $parsedSubtasks[] = ['text' => $taskText, 'checked' => $isChecked, 'original' => $task];
-                                }
-                                $progressPercent = $totalSub > 0 ? round(($completedSub / $totalSub) * 100) : 0;
+                        <?php if ($sectionType === 'completed'): ?>
+                            <div class="completed-section-title"><i class="ph-fill ph-check-circle"></i> Completed Assessments</div>
+                        <?php endif; ?>
 
-                                // Determine Status Badge Class Based on DB Value
-                                $statusClass = 'badge-status-not-started';
-                                if ($assignment['taskStatus'] === 'Ongoing') $statusClass = 'badge-status-ongoing';
-                                elseif ($assignment['taskStatus'] === 'Completed') $statusClass = 'badge-status-completed';
-                            ?>
-                            <div class="assignment-item" id="assignment-<?= $assignment['assignmentID'] ?>" data-priority="<?= htmlspecialchars($assignment['priorityLevel']) ?>">
-                                <div class="assignment-header">
-                                    <div class="assignment-info">
-                                        <div class="assignment-title"><?= htmlspecialchars($assignment['assignmentTitle']) ?></div>
-                                        <div class="assignment-meta">Due: <?= date('M d, Y', strtotime($assignment['dueDate'])) ?></div>
-                                        <div class="assignment-badges">
-                                            <span class="badge badge-type"><?= htmlspecialchars($assignment['assignmentType'] ?? 'Assignment') ?></span>
-                                            <span class="badge <?= $priorityClass ?>"><i class="ph ph-warning"></i> <?= htmlspecialchars($assignment['priorityLevel']) ?> Priority</span>
-                                            <span id="status-badge-<?= $assignment['assignmentID'] ?>" class="badge <?= $statusClass ?>">
-                                                <?= htmlspecialchars($assignment['taskStatus']) ?>
-                                            </span>
-                                        </div>
-                                    </div>
-                                    <div class="assignment-actions">
-                                        <?php if(!empty($assignment['pdfFile'])): ?>
-                                            <a href="uploads/assignments/<?= htmlspecialchars($assignment['pdfFile']) ?>" target="_blank" title="View Document">
-                                                <i class="ph ph-file-pdf"></i>
-                                            </a>
-                                        <?php endif; ?>
-                                        <button onclick="openEditAssignment(<?= $assignment['assignmentID'] ?>)" title="Edit">
-                                            <i class="ph ph-pencil"></i>
-                                        </button>
-                                        <button onclick="deleteAssignment(<?= $assignment['assignmentID'] ?>)" title="Delete">
-                                            <i class="ph ph-trash"></i>
-                                        </button>
-                                    </div>
-                                </div>
+                        <?php foreach ($group as $courseHeader => $courseAssignments): ?>
+                            <div class="course-group">
+                                <h3 class="course-group-title"><i class="ph ph-books"></i> <?= htmlspecialchars($courseHeader) ?></h3>
+                                
+                                <?php foreach ($courseAssignments as $assignment): ?>
+                                    <?php 
+                                        $priorityClass = 'badge-priority-' . strtolower($assignment['priorityLevel']); 
+                                        
+                                        // Parse Subtasks
+                                        $subtaskList = array_filter(array_map('trim', explode("\n", $assignment['subTasks'] ?? '')));
+                                        $totalSub = count($subtaskList);
+                                        $completedSub = 0;
+                                        $parsedSubtasks = [];
+                                        
+                                        foreach ($subtaskList as $idx => $task) {
+                                            $isChecked = false;
+                                            if (preg_match('/^\[(x|X)\]\s*(.*)/', $task, $matches)) {
+                                                $isChecked = true;
+                                                $completedSub++;
+                                                $taskText = $matches[2];
+                                            } elseif (preg_match('/^\[\s*\]\s*(.*)/', $task, $matches)) {
+                                                $taskText = $matches[1];
+                                            } else {
+                                                $taskText = $task;
+                                            }
+                                            $parsedSubtasks[] = ['text' => $taskText, 'checked' => $isChecked, 'original' => $task];
+                                        }
+                                        $progressPercent = $totalSub > 0 ? round(($completedSub / $totalSub) * 100) : 0;
 
-                                <?php if ($totalSub > 0): ?>
-                                    <div class="subtasks-container">
-                                        <div class="progress-wrapper">
-                                            <div class="progress-text">
-                                                <span>Task Progress</span>
-                                                <span id="progress-text-<?= $assignment['assignmentID'] ?>"><?= $progressPercent ?>%</span>
-                                            </div>
-                                            <div class="progress-track">
-                                                <div id="progress-bar-<?= $assignment['assignmentID'] ?>" class="progress-fill" style="width: <?= $progressPercent ?>%;"></div>
-                                            </div>
-                                        </div>
-                                        <div class="subtask-list">
-                                            <?php foreach ($parsedSubtasks as $index => $subtask): ?>
-                                                <label class="subtask-item">
-                                                    <input type="checkbox" onchange="toggleSubtask(<?= $assignment['assignmentID'] ?>, <?= $index ?>, this)" <?= $subtask['checked'] ? 'checked' : '' ?>>
-                                                    <span id="subtask-text-<?= $assignment['assignmentID'] ?>-<?= $index ?>" style="<?= $subtask['checked'] ? 'text-decoration: line-through; color: #94a3b8;' : '' ?>">
-                                                        <?= htmlspecialchars($subtask['text']) ?>
+                                        $isCompleted = ($assignment['taskStatus'] === 'Completed');
+                                        $statusClass = 'badge-status-not-started';
+                                        if ($assignment['taskStatus'] === 'Ongoing') $statusClass = 'badge-status-ongoing';
+                                        elseif ($isCompleted) $statusClass = 'badge-status-completed';
+                                        
+                                        $cardClass = $isCompleted ? 'assignment-item completed-card' : 'assignment-item';
+                                    ?>
+                                    <div class="<?= $cardClass ?>" id="assignment-<?= $assignment['assignmentID'] ?>" data-priority="<?= htmlspecialchars($assignment['priorityLevel']) ?>" data-status="<?= htmlspecialchars($assignment['taskStatus']) ?>">
+                                        <div class="assignment-header">
+                                            <input type="checkbox" 
+                                                   class="main-checkbox" 
+                                                   id="main-checkbox-<?= $assignment['assignmentID'] ?>" 
+                                                   <?= $isCompleted ? 'checked' : '' ?>
+                                                   onchange="toggleMainCheckbox(<?= $assignment['assignmentID'] ?>, this)"
+                                                   title="Mark entire assessment as completed">
+                                            
+                                            <div class="assignment-info">
+                                                <div class="assignment-title"><?= htmlspecialchars($assignment['assignmentTitle']) ?></div>
+                                                <div class="assignment-meta">Due: <?= date('M d, Y', strtotime($assignment['dueDate'])) ?></div>
+                                                <div class="assignment-badges">
+                                                    <span class="badge badge-type"><?= htmlspecialchars($assignment['assignmentType'] ?? 'Assignment') ?></span>
+                                                    <span class="badge <?= $priorityClass ?>"><i class="ph ph-warning"></i> <?= htmlspecialchars($assignment['priorityLevel']) ?> Priority</span>
+                                                    <span id="status-badge-<?= $assignment['assignmentID'] ?>" class="badge <?= $statusClass ?>">
+                                                        <?= htmlspecialchars($assignment['taskStatus']) ?>
                                                     </span>
-                                                </label>
-                                            <?php endforeach; ?>
+                                                </div>
+                                            </div>
+                                            <div class="assignment-actions">
+                                                <?php if(!empty($assignment['pdfFile'])): ?>
+                                                    <a href="uploads/assignments/<?= htmlspecialchars($assignment['pdfFile']) ?>" target="_blank" title="View Document">
+                                                        <i class="ph ph-file-pdf"></i>
+                                                    </a>
+                                                <?php endif; ?>
+                                                <button onclick="openEditAssignment(<?= $assignment['assignmentID'] ?>)" title="Edit">
+                                                    <i class="ph ph-pencil"></i>
+                                                </button>
+                                                <button onclick="deleteAssignment(<?= $assignment['assignmentID'] ?>)" title="Delete">
+                                                    <i class="ph ph-trash"></i>
+                                                </button>
+                                            </div>
                                         </div>
+
+                                        <?php if ($totalSub > 0): ?>
+                                            <div class="subtasks-container">
+                                                <div class="progress-wrapper">
+                                                    <div class="progress-text">
+                                                        <span>Task Progress</span>
+                                                        <span id="progress-text-<?= $assignment['assignmentID'] ?>"><?= $progressPercent ?>%</span>
+                                                    </div>
+                                                    <div class="progress-track">
+                                                        <div id="progress-bar-<?= $assignment['assignmentID'] ?>" class="progress-fill" style="width: <?= $progressPercent ?>%;"></div>
+                                                    </div>
+                                                </div>
+                                                <div class="subtask-list">
+                                                    <?php foreach ($parsedSubtasks as $index => $subtask): ?>
+                                                        <label class="subtask-item">
+                                                            <input type="checkbox" onchange="toggleSubtask(<?= $assignment['assignmentID'] ?>, <?= $index ?>, this)" <?= $subtask['checked'] ? 'checked' : '' ?>>
+                                                            <span id="subtask-text-<?= $assignment['assignmentID'] ?>-<?= $index ?>" style="<?= $subtask['checked'] ? 'text-decoration: line-through; color: #94a3b8;' : '' ?>">
+                                                                <?= htmlspecialchars($subtask['text']) ?>
+                                                            </span>
+                                                        </label>
+                                                    <?php endforeach; ?>
+                                                </div>
+                                            </div>
+                                        <?php endif; ?>
                                     </div>
-                                <?php endif; ?>
+                                <?php endforeach; ?>
                             </div>
                         <?php endforeach; ?>
                     </div>
@@ -439,6 +568,20 @@ try {
     </main>
 
     <div class="modal-overlay" id="modalOverlay" onclick="closeAllModals()"></div>
+
+    <div class="modal" id="deleteConfirmModal">
+        <div class="modal-header">
+            <h2 class="modal-title">Confirm Delete</h2>
+            <button class="close-modal-btn" onclick="closeModal('deleteConfirmModal')"><i class="ph ph-x"></i></button>
+        </div>
+        <div class="modal-body">
+            <p id="deleteConfirmMessage">Are you sure you want to delete this assessment?</p>
+            <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:12px;">
+                <button class="btn btn-outline" onclick="closeModal('deleteConfirmModal')">Cancel</button>
+                <button class="btn btn-danger" id="confirmDeleteBtn">Delete</button>
+            </div>
+        </div>
+    </div>
 
     <div class="modal" id="addAssignmentModal">
         <div class="modal-header">
@@ -610,13 +753,14 @@ try {
     <script>
         const existingAssignments = <?php echo json_encode($assignments); ?>;
 
-        // --- DYNAMIC STATUS CALCULATOR ---
-        function calculateTaskStatus(subTasksText) {
-            if (!subTasksText) return 'Not Started';
+        // --- SAFEGUARD STATUS CALCULATOR ---
+        function calculateTaskStatus(subTasksText, currentStatus = 'Not Started') {
+            if (!subTasksText || subTasksText.trim() === '') return currentStatus; 
+            
             let lines = subTasksText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
             let total = lines.length;
             
-            if (total === 0) return 'Not Started';
+            if (total === 0) return currentStatus;
             
             let completed = lines.filter(l => l.match(/^\[(x|X)\]/)).length;
             
@@ -625,26 +769,129 @@ try {
             return 'Not Started';
         }
 
-        // --- DYNAMIC FILTER LOGIC ---
-        function filterTasks(priority, btnElem) {
+        // --- DYNAMIC LIVE FILTERING ---
+        function filterTasks(filterType, btnElem) {
             document.querySelectorAll('.filter-pill').forEach(btn => btn.classList.remove('active'));
             btnElem.classList.add('active');
 
+            const isPriorityFilter = filterType.includes('Priority');
+            const cleanFilter = filterType.replace(' Priority', '');
+
+            let hasActiveVisible = false;
+            let hasCompletedVisible = false;
+
             document.querySelectorAll('.course-group').forEach(group => {
                 let hasVisibleTask = false;
+                
                 group.querySelectorAll('.assignment-item').forEach(item => {
-                    if (priority === 'All' || item.getAttribute('data-priority') === priority) {
-                        item.style.display = 'block';
+                    const priority = item.getAttribute('data-priority');
+                    const status = item.getAttribute('data-status');
+
+                    let show = false;
+                    if (filterType === 'All') show = true;
+                    else if (isPriorityFilter) show = (priority === cleanFilter);
+                    else show = (status === filterType);
+
+                    item.style.display = show ? 'block' : 'none';
+                    if (show) {
                         hasVisibleTask = true;
-                    } else {
-                        item.style.display = 'none';
+                        if (item.closest('#activeSection')) hasActiveVisible = true;
+                        if (item.closest('#completedSection')) hasCompletedVisible = true;
                     }
                 });
                 group.style.display = hasVisibleTask ? 'block' : 'none';
             });
+
+            // Handle Section Header Visibility
+            const activeSection = document.getElementById('activeSection');
+            if (activeSection) {
+                activeSection.style.display = (filterType === 'Completed' || !hasActiveVisible) ? 'none' : 'block';
+            }
+
+            const completedSection = document.getElementById('completedSection');
+            if (completedSection) {
+                if (filterType === 'Not Started' || filterType === 'Ongoing' || !hasCompletedVisible) {
+                    completedSection.style.display = 'none';
+                } else {
+                    completedSection.style.display = 'block';
+                }
+            }
         }
 
-        // --- SUBTASK CHECKBOX LOGIC (WITH AUTO-STATUS UPDATE) ---
+        // --- MASTER COMPLETION CHECKBOX ---
+        async function toggleMainCheckbox(assignmentID, checkboxElem) {
+            const assignment = existingAssignments.find(a => a.assignmentID == assignmentID);
+            if (!assignment) return;
+
+            const isCompleted = checkboxElem.checked;
+            const newStatus = isCompleted ? 'Completed' : 'Not Started';
+
+            let newSubTasksText = assignment.subTasks || '';
+            if (newSubTasksText.trim() !== '') {
+                let lines = newSubTasksText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+                for (let i = 0; i < lines.length; i++) {
+                    let coreText = lines[i].replace(/^\[(x|X|\s)?\]\s*/, '');
+                    lines[i] = (isCompleted ? '[x] ' : '[ ] ') + coreText;
+                    
+                    const subCb = document.querySelector(`input[onchange="toggleSubtask(${assignmentID}, ${i}, this)"]`);
+                    if (subCb) subCb.checked = isCompleted;
+                    
+                    const textSpan = document.getElementById(`subtask-text-${assignmentID}-${i}`);
+                    if (textSpan) {
+                        textSpan.style.textDecoration = isCompleted ? 'line-through' : 'none';
+                        textSpan.style.color = isCompleted ? '#94a3b8' : 'inherit';
+                    }
+                }
+                assignment.subTasks = lines.join('\n');
+                
+                const pct = isCompleted ? 100 : 0;
+                const progText = document.getElementById(`progress-text-${assignmentID}`);
+                const progBar = document.getElementById(`progress-bar-${assignmentID}`);
+                if (progText) progText.innerText = pct + '%';
+                if (progBar) progBar.style.width = pct + '%';
+            }
+
+            const card = document.getElementById(`assignment-${assignmentID}`);
+            if (card) {
+                card.setAttribute('data-status', newStatus);
+                if (isCompleted) card.classList.add('completed-card');
+                else card.classList.remove('completed-card');
+                
+                const statusBadge = document.getElementById(`status-badge-${assignmentID}`);
+                if (statusBadge) {
+                    statusBadge.innerText = newStatus;
+                    statusBadge.className = 'badge ' + 
+                        (newStatus === 'Not Started' ? 'badge-status-not-started' : 
+                        (newStatus === 'Ongoing' ? 'badge-status-ongoing' : 'badge-status-completed'));
+                }
+            }
+
+            try {
+                const response = await fetch('assignments.php', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        action: 'updateSubtaskProgress',
+                        assignmentID: assignmentID, 
+                        subTasks: assignment.subTasks, 
+                        taskStatus: newStatus 
+                    })
+                });
+                const data = await response.json();
+                if (!data.success) throw new Error('Failed to save task progress');
+                
+                if (newStatus === 'Completed') {
+                    showNotification('Assessment marked as completed.', 'success');
+                    setTimeout(() => location.reload(), 1500);
+                } else {
+                    setTimeout(() => location.reload(), 500);
+                }
+            } catch (err) {
+                showNotification('Could not save progress to server', 'error');
+                checkboxElem.checked = !isCompleted;
+            }
+        }
+
         async function toggleSubtask(assignmentID, index, checkboxElem) {
             const assignment = existingAssignments.find(a => a.assignmentID == assignmentID);
             if (!assignment) return;
@@ -669,24 +916,30 @@ try {
             const completed = lines.filter(l => l.match(/^\[(x|X)\]/)).length;
             const percentage = Math.round((completed / total) * 100);
             
-            // Calculate new Status using helper
             let newStatus = calculateTaskStatus(assignment.subTasks);
             assignment.taskStatus = newStatus;
 
-            // Update Progress Bar UI
             document.getElementById(`progress-text-${assignmentID}`).innerText = percentage + '%';
             document.getElementById(`progress-bar-${assignmentID}`).style.width = percentage + '%';
 
-            // Update Badge Color & Text Dynamically
-            const statusBadge = document.getElementById(`status-badge-${assignmentID}`);
-            if (statusBadge) {
-                statusBadge.innerText = newStatus;
-                statusBadge.className = 'badge ' + 
-                    (newStatus === 'Not Started' ? 'badge-status-not-started' : 
-                    (newStatus === 'Ongoing' ? 'badge-status-ongoing' : 'badge-status-completed'));
+            const card = document.getElementById(`assignment-${assignmentID}`);
+            if (card) {
+                card.setAttribute('data-status', newStatus);
+                if (newStatus === 'Completed') card.classList.add('completed-card');
+                else card.classList.remove('completed-card');
+                
+                const statusBadge = document.getElementById(`status-badge-${assignmentID}`);
+                if (statusBadge) {
+                    statusBadge.innerText = newStatus;
+                    statusBadge.className = 'badge ' + 
+                        (newStatus === 'Not Started' ? 'badge-status-not-started' : 
+                        (newStatus === 'Ongoing' ? 'badge-status-ongoing' : 'badge-status-completed'));
+                }
             }
 
-            // Save to Backend
+            const mainCb = document.getElementById(`main-checkbox-${assignmentID}`);
+            if (mainCb) mainCb.checked = (newStatus === 'Completed');
+
             try {
                 const response = await fetch('assignments.php', {
                     method: 'POST',
@@ -698,6 +951,13 @@ try {
                 });
                 const data = await response.json();
                 if (!data.success) throw new Error('Failed to save task progress');
+
+                if (newStatus === 'Completed') {
+                    showNotification('Assessment marked as completed.', 'success');
+                    setTimeout(() => location.reload(), 1500);
+                } else if (percentage !== 100 && mainCb && !checkboxElem.checked && percentage === ((completed-1)/total)*100) {
+                   setTimeout(() => location.reload(), 500);
+                }
             } catch (err) {
                 showNotification('Could not save progress to server', 'error');
             }
@@ -728,14 +988,27 @@ try {
 
         function showNotification(message, type = 'success') {
             const toast = document.getElementById('notificationToast');
-            document.getElementById('notificationMessage').innerText = message;
-            const cls = type === 'error' ? 'error' : 'success';
+            const msgSpan = document.getElementById('notificationMessage');
+            const icon = toast.querySelector('i');
+            
+            msgSpan.innerText = message;
             toast.classList.remove('success', 'error');
-            toast.classList.add(cls, 'show');
-            setTimeout(() => {
+            
+            if (type === 'error') {
+                toast.classList.add('error');
+                icon.className = 'ph-fill ph-warning-circle';
+                icon.style.color = '#dc2626';
+            } else {
+                toast.classList.add('success');
+                icon.className = 'ph-fill ph-check-circle';
+                icon.style.color = '#16a34a';
+            }
+            
+            toast.classList.add('show');
+            clearTimeout(toast.timeoutId);
+            toast.timeoutId = setTimeout(() => {
                 toast.classList.remove('show');
-                toast.classList.remove(cls);
-            }, 3000);
+            }, 4000);
         }
 
         function togglePdfUpload() {
@@ -818,7 +1091,11 @@ try {
 
                 setTimeout(() => { 
                     uploadProgress.style.display = 'none'; 
-                    if (!data.success) { showNotification(data.error || 'Extraction failed', 'error'); return; }
+                    if (!data.success) { 
+                        showNotification(data.error || 'Extraction failed', 'error'); 
+                        removeFileBtn.click(); 
+                        return; 
+                    }
 
                     extractionResults.style.display = 'block';
                     document.getElementById('extractedPdfFile').value = data.filePath || ''; 
@@ -831,14 +1108,14 @@ try {
                     }
                     if(data.extractedData?.due_date) document.getElementById('extractedDueDate').value = data.extractedData.due_date;
 
-                    showNotification('Document extracted! Please review the details.');
+                    showNotification('Document extracted! Please review the details.', 'success');
                 }, 500);
             } catch (err) {
                 console.error(err); uploadProgress.style.display = 'none'; showNotification(err.message || 'Error processing PDF', 'error'); removeFileBtn.click();
             }
         }
 
-        // --- SAVING ASSIGNMENTS (WITH AUTO-STATUS) ---
+        // --- SAVING ASSIGNMENTS ---
         async function handleAddFromPDF(e) {
             e.preventDefault();
             const title = document.getElementById('extractedTitle').value;
@@ -850,8 +1127,7 @@ try {
 
             if(!title || !courseID || !dueDate) { showNotification('Title, Course, and Due Date are required.', 'error'); return; }
 
-            // Auto-calculate status before saving
-            const taskStatus = calculateTaskStatus(subTasks);
+            const taskStatus = calculateTaskStatus(subTasks, 'Not Started');
 
             const btn = document.getElementById('addFromPdfBtn');
             btn.innerHTML = '<i class="ph ph-spinner animate-spin"></i> Saving...';
@@ -869,8 +1145,13 @@ try {
                     })
                 });
                 const data = await response.json();
+                
                 if (!data.success) throw new Error(data.error || 'Failed to save assessment');
-                location.reload();
+                
+                showNotification('Assessment added successfully.', 'success');
+                closeModal('addAssignmentModal');
+                setTimeout(() => location.reload(), 1500);
+
             } catch(err) {
                 showNotification(err.message || 'Error saving assessment', 'error');
                 btn.innerHTML = '<i class="ph ph-check-circle"></i> Save Assessment';
@@ -888,8 +1169,7 @@ try {
 
             if(!title || !courseID || !dueDate) { showNotification('Title, Course, and Due Date are required.', 'error'); return; }
 
-            // Auto-calculate status before saving
-            const taskStatus = calculateTaskStatus(subTasks);
+            const taskStatus = calculateTaskStatus(subTasks, 'Not Started');
 
             const btn = document.getElementById('addAssignmentBtn');
             btn.innerText = 'Saving...';
@@ -907,8 +1187,13 @@ try {
                     })
                 });
                 const data = await response.json();
+                
                 if (!data.success) throw new Error(data.error || 'Failed to add assessment');
-                location.reload();
+                
+                showNotification('Assessment added successfully.', 'success');
+                closeModal('addAssignmentModal');
+                setTimeout(() => location.reload(), 1500);
+
             } catch (err) {
                 showNotification(err.message || 'Error adding assessment', 'error');
                 btn.innerText = 'Add Assessment';
@@ -936,8 +1221,8 @@ try {
             const dueDate = document.getElementById('editDueDate').value;
             const subTasks = document.getElementById('editSubTasks').value;
 
-            // Auto-calculate status before saving
-            const taskStatus = calculateTaskStatus(subTasks);
+            const assignment = existingAssignments.find(a => a.assignmentID == assignmentID);
+            const taskStatus = calculateTaskStatus(subTasks, assignment ? assignment.taskStatus : 'Not Started');
 
             btn.innerText = 'Saving...';
             btn.disabled = true;
@@ -954,8 +1239,13 @@ try {
                     })
                 });
                 const data = await response.json();
+                
                 if (!data.success) throw new Error(data.error || 'Failed to update assessment');
-                location.reload();
+                
+                showNotification('Assessment updated successfully.', 'success');
+                closeModal('editAssignmentModal');
+                setTimeout(() => location.reload(), 1500);
+
             } catch (err) {
                 showNotification(err.message || 'Error updating assessment', 'error');
                 btn.innerText = 'Save Changes';
@@ -963,8 +1253,23 @@ try {
             }
         }
 
-        async function deleteAssignment(assignmentID) {
-            if (!confirm('Are you sure you want to delete this assessment?')) return;
+        // --- DELETE CONFIRMATION MODAL LOGIC ---
+        window.pendingDeleteAssignment = null;
+
+        function deleteAssignment(assignmentID) {
+            window.pendingDeleteAssignment = assignmentID;
+            document.getElementById('deleteConfirmMessage').innerText = 'Are you sure you want to delete this assessment?';
+            openModal('deleteConfirmModal');
+        }
+
+        document.getElementById('confirmDeleteBtn').addEventListener('click', async function() {
+            const assignmentID = window.pendingDeleteAssignment;
+            if (!assignmentID) return;
+            
+            closeModal('deleteConfirmModal');
+            const btn = document.getElementById('confirmDeleteBtn');
+            btn.innerText = 'Deleting...';
+            btn.disabled = true;
 
             try {
                 const response = await fetch('assignments.php', {
@@ -974,11 +1279,17 @@ try {
                 });
                 const data = await response.json();
                 if (!data.success) throw new Error(data.error || 'Failed to delete assessment');
-                location.reload(); 
+                
+                showNotification('Assessment deleted successfully.', 'success');
+                setTimeout(() => location.reload(), 1500); 
             } catch (err) {
                 showNotification(err.message || 'Error deleting assessment', 'error');
+                btn.innerText = 'Delete';
+                btn.disabled = false;
+            } finally {
+                window.pendingDeleteAssignment = null;
             }
-        }
+        });
     </script>
 </body>
 </html>
