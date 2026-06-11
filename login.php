@@ -3,6 +3,13 @@ include 'dbConn.php';
 session_start();
 $message = '';
 
+// 1. If the student is already logged in, redirect them directly to the dashboard
+if (isset($_SESSION['studentID'])) {
+    header('Location: dashboard.php');
+    exit;
+}
+
+// 2. Handle the Login Form Submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $email = isset($_POST['email']) ? trim($_POST['email']) : '';
     $password = $_POST['password'] ?? '';
@@ -22,7 +29,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $_SESSION['firstName'] = $user['firstName'];
                 $_SESSION['lastName'] = $user['lastName'];
                 $_SESSION['email'] = $email;
-                header('Location: academic_structure.php');
+                
+                header('Location: dashboard.php');
                 exit;
             }
 
