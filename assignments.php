@@ -320,8 +320,17 @@ try {
     ');
     $stmt->execute([':studentID' => $studentID]);
     $assignments = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    $today = new DateTime('today');
     
-    foreach ($assignments as $a) {
+    foreach ($assignments as &$a) {
+        // AUTOMATIC PAST DUE CALCULATION
+        $dueDateObj = new DateTime($a['dueDate']);
+        if ($a['taskStatus'] !== 'Completed' && $dueDateObj < $today) {
+            $a['taskStatus'] = 'Past Due';
+        }
+
+        $a['priorityLevel'] = calculatePriority($a['dueDate']);
         $courseHeader = $a['courseCode'] . ' - ' . $a['courseName'];
         
         if ($a['taskStatus'] === 'Completed') {
@@ -361,6 +370,14 @@ try {
         .completed-card { background-color: #f8fafc; border-color: #cbd5e1; opacity: 0.85; }
         .completed-card .assignment-title { text-decoration: line-through; color: #94a3b8; }
         .completed-card .assignment-meta { color: #94a3b8; }
+
+        /* Past Due Card UI Styling */
+        .past-due-card { background-color: #fff5f5; border-color: #fca5a5; }
+        .past-due-card .assignment-title { color: #991b1b; }
+
+        /* Status Badges */
+        .badge-status-past-due { background-color: #fee2e2; color: #dc2626; border: 1px solid #fca5a5; }
+        .badge-completed-late { background-color: #ffedd5; color: #ea580c; border: 1px solid #fed7aa; }
         
         .completed-section-title { font-size: 18px; font-weight: 700; color: #64748b; margin-bottom: 20px; display: flex; align-items: center; gap: 8px; padding-bottom: 10px; border-bottom: 2px dashed #e2e8f0; }
 
@@ -432,11 +449,17 @@ try {
             </div>
 
             <?php if (count($assignments) > 0): ?>
+
+            <div class="search-container" style="position: relative; margin-bottom: 20px;">
+                <i class="ph ph-magnifying-glass" style="position: absolute; left: 16px; top: 50%; transform: translateY(-50%); color: #94a3b8; font-size: 18px;"></i>
+                <input type="text" id="searchInput" class="form-control" style="padding-left: 44px; border-radius: 999px;" placeholder="Search by course code or assessment title..." oninput="handleSearch(event)">
+            </div>
             <div class="filter-menu">
                 <button class="filter-pill active" onclick="filterTasks('All', this)">All</button>
                 <button class="filter-pill" onclick="filterTasks('Not Started', this)">Not Started</button>
                 <button class="filter-pill" onclick="filterTasks('Ongoing', this)">Ongoing</button>
                 <button class="filter-pill" onclick="filterTasks('Completed', this)">Completed</button>
+                <button class="filter-pill" onclick="filterTasks('Past Due', this)">Past Due</button>
                 <button class="filter-pill" onclick="filterTasks('High Priority', this)">High Priority</button>
                 <button class="filter-pill" onclick="filterTasks('Medium Priority', this)">Medium Priority</button>
                 <button class="filter-pill" onclick="filterTasks('Low Priority', this)">Low Priority</button>
@@ -445,7 +468,7 @@ try {
 
             <div class="empty-state-card" id="emptyState" style="<?= count($assignments) > 0 ? 'display:none' : '' ?>">
                 <i class="ph ph-file-dashed" style="font-size: 48px; color: #cbd5e1; margin-bottom: 16px; display: block;"></i>
-                No assignments found. Click "Add Assessment" to get started!
+                <span id="emptyStateMessage">No assignments found.</span>
             </div>
 
             <div id="assignmentsList">
@@ -489,11 +512,17 @@ try {
                                         $progressPercent = $totalSub > 0 ? round(($completedSub / $totalSub) * 100) : 0;
 
                                         $isCompleted = ($assignment['taskStatus'] === 'Completed');
+                                        $isPastDue = ($assignment['taskStatus'] === 'Past Due');
+                                        $isCompletedLate = $isCompleted && (new DateTime($assignment['dueDate']) < new DateTime('today'));
+
                                         $statusClass = 'badge-status-not-started';
                                         if ($assignment['taskStatus'] === 'Ongoing') $statusClass = 'badge-status-ongoing';
                                         elseif ($isCompleted) $statusClass = 'badge-status-completed';
+                                        elseif ($isPastDue) $statusClass = 'badge-status-past-due';
                                         
-                                        $cardClass = $isCompleted ? 'assignment-item completed-card' : 'assignment-item';
+                                        $cardClass = 'assignment-item';
+                                        if ($isCompleted) $cardClass .= ' completed-card';
+                                        if ($isPastDue) $cardClass .= ' past-due-card';
                                     ?>
                                     <div class="<?= $cardClass ?>" id="assignment-<?= $assignment['assignmentID'] ?>" data-priority="<?= htmlspecialchars($assignment['priorityLevel']) ?>" data-status="<?= htmlspecialchars($assignment['taskStatus']) ?>">
                                         <div class="assignment-header">
@@ -511,8 +540,12 @@ try {
                                                     <span class="badge badge-type"><?= htmlspecialchars($assignment['assignmentType'] ?? 'Assignment') ?></span>
                                                     <span class="badge <?= $priorityClass ?>"><i class="ph ph-warning"></i> <?= htmlspecialchars($assignment['priorityLevel']) ?> Priority</span>
                                                     <span id="status-badge-<?= $assignment['assignmentID'] ?>" class="badge <?= $statusClass ?>">
+                                                        <?php if ($isPastDue): ?><i class="ph ph-warning-circle"></i> <?php endif; ?>
                                                         <?= htmlspecialchars($assignment['taskStatus']) ?>
                                                     </span>
+                                                    <?php if ($isCompletedLate): ?>
+                                                        <span class="badge badge-completed-late"><i class="ph ph-clock-countdown"></i> Completed Late</span>
+                                                    <?php endif; ?>
                                                 </div>
                                             </div>
                                             <div class="assignment-actions">
@@ -753,70 +786,148 @@ try {
     <script>
         const existingAssignments = <?php echo json_encode($assignments); ?>;
 
-        // --- SAFEGUARD STATUS CALCULATOR ---
-        function calculateTaskStatus(subTasksText, currentStatus = 'Not Started') {
-            if (!subTasksText || subTasksText.trim() === '') return currentStatus; 
-            
-            let lines = subTasksText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+        // --- STATUS CALCULATOR WITH PAST DUE CAPABILITIES ---
+        function calculateTaskStatus(subTasksText, dueDateStr, currentStatus = 'Not Started') {
+            let lines = subTasksText ? subTasksText.split('\n').map(l => l.trim()).filter(l => l.length > 0) : [];
             let total = lines.length;
-            
-            if (total === 0) return currentStatus;
-            
             let completed = lines.filter(l => l.match(/^\[(x|X)\]/)).length;
             
-            if (completed === total) return 'Completed';
-            if (completed > 0) return 'Ongoing';
-            return 'Not Started';
+            let baseStatus = 'Not Started';
+            if (total > 0) {
+                if (completed === total) baseStatus = 'Completed';
+                else if (completed > 0) baseStatus = 'Ongoing';
+            } else {
+                baseStatus = currentStatus === 'Completed' ? 'Completed' : currentStatus;
+            }
+            
+            if (baseStatus === 'Completed') return 'Completed';
+            
+            // Check past due
+            if (dueDateStr) {
+                const today = new Date();
+                today.setHours(0,0,0,0);
+                const due = new Date(dueDateStr);
+                due.setHours(0,0,0,0);
+                if (due < today) return 'Past Due';
+            }
+            
+            return baseStatus;
         }
 
         // --- DYNAMIC LIVE FILTERING ---
-        function filterTasks(filterType, btnElem) {
-            document.querySelectorAll('.filter-pill').forEach(btn => btn.classList.remove('active'));
-            btnElem.classList.add('active');
+        let currentSearchTerm = '';
+let currentFilter = 'All';
 
-            const isPriorityFilter = filterType.includes('Priority');
-            const cleanFilter = filterType.replace(' Priority', '');
+// Initialize the limits when the page loads
+document.addEventListener('DOMContentLoaded', () => {
+    document.querySelectorAll('.course-group').forEach(g => g.dataset.limit = 3);
+    applyFiltersAndSearch();
+});
 
-            let hasActiveVisible = false;
-            let hasCompletedVisible = false;
+function handleSearch(e) {
+    currentSearchTerm = e.target.value;
+    // Reset limits so search results start collapsed neatly
+    document.querySelectorAll('.course-group').forEach(g => g.dataset.limit = 3);
+    applyFiltersAndSearch();
+}
 
-            document.querySelectorAll('.course-group').forEach(group => {
-                let hasVisibleTask = false;
-                
-                group.querySelectorAll('.assignment-item').forEach(item => {
-                    const priority = item.getAttribute('data-priority');
-                    const status = item.getAttribute('data-status');
+function filterTasks(type, btnElement) {
+    document.querySelectorAll('.filter-pill').forEach(btn => btn.classList.remove('active'));
+    btnElement.classList.add('active');
+    currentFilter = type;
+    // Reset limits when changing tabs
+    document.querySelectorAll('.course-group').forEach(g => g.dataset.limit = 3);
+    applyFiltersAndSearch();
+}
 
-                    let show = false;
-                    if (filterType === 'All') show = true;
-                    else if (isPriorityFilter) show = (priority === cleanFilter);
-                    else show = (status === filterType);
+function applyFiltersAndSearch() {
+    const term = currentSearchTerm.toLowerCase();
+    const courseGroups = document.querySelectorAll('.course-group');
+    let totalVisibleAssignments = 0;
 
-                    item.style.display = show ? 'block' : 'none';
-                    if (show) {
-                        hasVisibleTask = true;
-                        if (item.closest('#activeSection')) hasActiveVisible = true;
-                        if (item.closest('#completedSection')) hasCompletedVisible = true;
-                    }
-                });
-                group.style.display = hasVisibleTask ? 'block' : 'none';
-            });
+    courseGroups.forEach(group => {
+        const courseHeader = group.querySelector('.course-group-title').innerText.toLowerCase();
+        const assignments = Array.from(group.querySelectorAll('.assignment-item'));
+        
+        let matchCount = 0;
+        let visibleInGroup = 0;
+        const limit = parseInt(group.dataset.limit || 3);
 
-            // Handle Section Header Visibility
-            const activeSection = document.getElementById('activeSection');
-            if (activeSection) {
-                activeSection.style.display = (filterType === 'Completed' || !hasActiveVisible) ? 'none' : 'block';
-            }
-
-            const completedSection = document.getElementById('completedSection');
-            if (completedSection) {
-                if (filterType === 'Not Started' || filterType === 'Ongoing' || !hasCompletedVisible) {
-                    completedSection.style.display = 'none';
-                } else {
-                    completedSection.style.display = 'block';
+        assignments.forEach(item => {
+            const title = item.querySelector('.assignment-title').innerText.toLowerCase();
+            const status = item.dataset.status;
+            const priority = item.dataset.priority;
+            
+            // 1. Check Search Match
+            const matchesSearch = term === '' || courseHeader.includes(term) || title.includes(term);
+            
+            // 2. Check Filter Match
+            let matchesFilter = true;
+            if (currentFilter !== 'All') {
+                if (['Not Started', 'Ongoing', 'Completed', 'Past Due'].includes(currentFilter)) {
+                    matchesFilter = (status === currentFilter);
+                } else if (currentFilter.includes('Priority')) {
+                    matchesFilter = (priority + ' Priority' === currentFilter);
                 }
             }
+
+            // 3. Apply Visibility Logic
+            if (matchesSearch && matchesFilter) {
+                matchCount++;
+                if (visibleInGroup < limit) {
+                    item.style.display = 'block'; // Show item
+                    item.classList.remove('hidden-assignment');
+                    visibleInGroup++;
+                    totalVisibleAssignments++;
+                } else {
+                    item.style.display = 'none'; // Exceeds Load More limit
+                    item.classList.add('hidden-assignment');
+                }
+            } else {
+                item.style.display = 'none'; // Fails search/filter
+            }
+        });
+
+        // 4. Handle "Load More" Button Logic
+        let loadMoreBtn = group.querySelector('.load-more-btn');
+        if (matchCount > limit) {
+            // Create button if it doesn't exist
+            if (!loadMoreBtn) {
+                loadMoreBtn = document.createElement('button');
+                loadMoreBtn.className = 'load-more-btn';
+                group.appendChild(loadMoreBtn);
+            }
+            loadMoreBtn.style.display = 'flex';
+            loadMoreBtn.innerHTML = `Load More (${matchCount - limit} remaining) <i class="ph ph-caret-down"></i>`;
+            
+            // When clicked, increase limit by 3 and re-render
+            loadMoreBtn.onclick = () => {
+                group.dataset.limit = limit + 3;
+                applyFiltersAndSearch();
+            };
+        } else {
+            // Hide button if we've shown all matching items in this course
+            if (loadMoreBtn) loadMoreBtn.style.display = 'none';
         }
+
+        // 5. Hide the entire Course block if nothing inside matches
+        group.style.display = matchCount === 0 ? 'none' : 'block';
+    });
+
+    // 6. Handle the main empty state illustration
+        const emptyState = document.getElementById('emptyState');
+        if (totalVisibleAssignments === 0) {
+            emptyState.style.display = 'block';
+            const emptyStateMessage = document.getElementById('emptyStateMessage');
+            if (emptyStateMessage) {
+                emptyStateMessage.innerText = currentFilter === 'Past Due' 
+                    ? 'No past due assignments found.' 
+                    : 'No assignments found.';
+            }
+        } else {
+            emptyState.style.display = 'none';
+        }
+    }
 
         // --- MASTER COMPLETION CHECKBOX ---
         async function toggleMainCheckbox(assignmentID, checkboxElem) {
@@ -824,7 +935,15 @@ try {
             if (!assignment) return;
 
             const isCompleted = checkboxElem.checked;
-            const newStatus = isCompleted ? 'Completed' : 'Not Started';
+            let newStatus = 'Not Started';
+            
+            if (isCompleted) {
+                newStatus = 'Completed';
+            } else {
+                const today = new Date(); today.setHours(0,0,0,0);
+                const due = new Date(assignment.dueDate); due.setHours(0,0,0,0);
+                newStatus = due < today ? 'Past Due' : 'Not Started';
+            }
 
             let newSubTasksText = assignment.subTasks || '';
             if (newSubTasksText.trim() !== '') {
@@ -916,7 +1035,7 @@ try {
             const completed = lines.filter(l => l.match(/^\[(x|X)\]/)).length;
             const percentage = Math.round((completed / total) * 100);
             
-            let newStatus = calculateTaskStatus(assignment.subTasks);
+            let newStatus = calculateTaskStatus(assignment.subTasks, assignment.dueDate, assignment.taskStatus);
             assignment.taskStatus = newStatus;
 
             document.getElementById(`progress-text-${assignmentID}`).innerText = percentage + '%';
@@ -1290,6 +1409,17 @@ try {
                 window.pendingDeleteAssignment = null;
             }
         });
+
+        document.addEventListener("DOMContentLoaded", function() {
+    const urlParams = new URLSearchParams(window.location.search);
+    const filterParam = urlParams.get('filter');
+    
+    if (filterParam === 'Past Due') {
+        // Find your filter pills and click/trigger the 'Past Due' one automatically
+        const pastDuePill = Array.from(document.querySelectorAll('.filter-pill')).find(el => el.innerText.trim() === 'Past Due');
+        if (pastDuePill) pastDuePill.click();
+    }
+});
     </script>
 </body>
 </html>
