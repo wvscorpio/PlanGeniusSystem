@@ -1,5 +1,16 @@
 <?php
+require_once 'dbConn.php';
 session_start();
+
+$studentID = $_SESSION['studentID'] ?? null;
+if ($studentID !== null) {
+    try {
+        $stmt = $conn->prepare('UPDATE "Student" SET "api_token" = NULL, "api_token_expires_at" = NULL WHERE "studentID" = :studentID');
+        $stmt->execute([':studentID' => $studentID]);
+    } catch (PDOException $e) {
+        // Continue clearing the browser session even if token revocation fails.
+    }
+}
 
 // Clear all session data
 $_SESSION = [];

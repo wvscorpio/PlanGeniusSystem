@@ -2,7 +2,33 @@
 include 'dbConn.php';
 session_start();
 $message = '';
+$successMessage = '';
 
+// Check for success message from password reset
+if (isset($_SESSION['success_message'])) {
+    $successMessage = $_SESSION['success_message'];
+    unset($_SESSION['success_message']);
+}
+
+// Helper function to determine landing page based on existing academic structure
+function getLandingPage($conn, $studentID) {
+    try {
+        $check = $conn->prepare('SELECT 1 FROM "SemesterPlan" WHERE "studentID" = :studentID LIMIT 1');
+        $check->execute([':studentID' => $studentID]);
+        return $check->fetch() ? 'dashboard.php' : 'academic_structure.php';
+    } catch (PDOException $e) {
+        return 'academic_structure.php';
+    }
+}
+
+// 1. If the student is already logged in, redirect based on academic structure
+if (isset($_SESSION['studentID'])) {
+    $destination = getLandingPage($conn, $_SESSION['studentID']);
+    header('Location: ' . $destination);
+    exit;
+}
+
+// 2. Handle the Login Form Submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $email = isset($_POST['email']) ? trim($_POST['email']) : '';
     $password = $_POST['password'] ?? '';
@@ -22,7 +48,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $_SESSION['firstName'] = $user['firstName'];
                 $_SESSION['lastName'] = $user['lastName'];
                 $_SESSION['email'] = $email;
-                header('Location: academic_structure.php');
+                
+                // Redirect first-timers without semesters to Academic Structure, others to Dashboard
+                $destination = getLandingPage($conn, $user['studentID']);
+                header('Location: ' . $destination);
                 exit;
             }
 
@@ -41,6 +70,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   <title>PlanGenius — Login</title>
   <link rel="stylesheet" type="text/css" href="css/style.css"> 
   <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600;700&display=swap" rel="stylesheet">
+  <script src="https://unpkg.com/@phosphor-icons/web"></script>
   <style>
     :root{
       --bg1:#e9f0ff;
@@ -62,13 +92,50 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       width:520px;max-width:94%;background:var(--card);border-radius:16px;padding:34px;box-shadow:0 6px 20px rgba(38,61,91,0.08);
     }
     .brand{ 
-      text-align:center;margin-bottom:8px; 
+      text-align:center;
+      margin-bottom:20px; 
+      display:flex;
+      justify-content:center;
     }
-    .brand h1{ 
-      margin:0;font-size:36px;color:var(--accent);font-weight:700; 
+    .brand-link{
+      display:inline-flex;
+      align-items:center;
+      gap:12px;
+      text-decoration:none;
     }
-    .brand p{ 
-      margin:4px 0 20px;color:#7b7f87;font-weight:500 
+    .brand-icon{
+      width:44px;
+      height:44px;
+      border-radius:12px;
+      background:linear-gradient(135deg, #9333ea, #7c3aed);
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      color:#ffffff;
+      box-shadow:0 4px 12px rgba(124, 58, 237, 0.25);
+    }
+    .brand-text{
+      text-align:left;
+      display:flex;
+      flex-direction:column;
+    }
+    .brand-title{
+      font-size:24px;
+      font-weight:800;
+      color:#2e1065;
+      letter-spacing:-0.5px;
+      line-height:1.1;
+    }
+    .brand-title span{
+      color:#7c3aed;
+    }
+    .brand-subtitle{
+      font-size:10px;
+      font-weight:600;
+      color:#9333ea;
+      text-transform:uppercase;
+      letter-spacing:1px;
+      margin-top:1px;
     }
 
     .tabbar{ 
@@ -98,25 +165,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     .footer{ 
       text-align:center;margin-top:12px;color:#9aa0a6;font-size:13px 
     }
-
     @media (max-width:520px){ .tabbar{ width:100%; } }
   </style>
 </head>
 <body>
   <div class="wrap">
+    <!-- Landing Page Matching Logo -->
     <div class="brand">
-      <h1>PlanGenius</h1>
-      <p>Intelligent Planner for Students</p>
+      <a href="index.php" class="brand-link">
+        <div class="brand-icon">
+          <i class="ph ph-books" style="font-size:22px;"></i>
+        </div>
+        <div class="brand-text">
+          <span class="brand-title">Plan<span>Genius</span></span>
+          <span class="brand-subtitle">Academic Planner</span>
+        </div>
+      </a>
     </div>
 
+    <div id="toast-container" class="toast-container" aria-live="polite"></div>
     <div class="tabbar">
         <a href="login.php" class="tab active">Login</a>
         <a href="register.php" class="tab">Register</a>
     </div>
-
-    <?php if ($message): ?>
-      <div class="alert"><?= $message ?></div>
-    <?php endif; ?>
 
     <form method="post" action="login.php">
       <label for="email">Email</label>
@@ -128,7 +199,48 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       <button type="submit" class="btn">Login</button>
     </form>
 
-    <div class="footer">Forgot password? Contact your administrator.</div>
+    <div class="footer">Forgot password? <a href="forgot_password.php" style="color: #3b82f6; text-decoration: none; font-weight: 500;">Reset here</a></div>
+    
+    <div class="notification-toast" id="notificationToast">
+      <i class="ph-fill ph-check-circle"></i> <span id="notificationMessage">Login successfully!</span>
+    </div>
   </div>
+
+<script>
+    const serverMessage = <?php echo json_encode($message); ?>;
+    const successMessage = <?php echo json_encode($successMessage); ?>;
+
+    function showNotification(message, type = 'success') {
+      const toast = document.getElementById('notificationToast');
+      document.getElementById('notificationMessage').innerText = message; 
+      
+      const cls = type === 'error' ? 'error' : 'success';
+      toast.classList.remove('success', 'error');
+      toast.classList.add(cls, 'show');
+      
+      setTimeout(() => {
+          toast.classList.remove('show');
+          toast.classList.remove(cls);
+      }, 3000);
+    }
+
+    function escapeHtml(str) {
+      if (!str) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+    document.addEventListener('DOMContentLoaded', () => {
+      if (serverMessage) {
+        showNotification(escapeHtml(serverMessage), 'error');
+      }
+      if (successMessage) {                      
+        showNotification(escapeHtml(successMessage), 'success');  
+      }
+    });
+  </script>
 </body>
 </html>

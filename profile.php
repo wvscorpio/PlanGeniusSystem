@@ -1,114 +1,270 @@
 <?php
-$current_page = 'profile';
+include 'dbConn.php';
+session_start();
 
-$profile_file = __DIR__ . DIRECTORY_SEPARATOR . 'data' . DIRECTORY_SEPARATOR . 'profile.json';
-$profile = [
-    'first_name' => 'John',
-    'last_name' => 'Doe',
-    'email' => 'john.doe@example.com',
-    'telephone' => '1234567890',
-];
-
-if (file_exists($profile_file)) {
-    $raw = file_get_contents($profile_file);
-    $profile = json_decode($raw, true) ?: $profile;
+// Ensure the user is logged in
+$studentID = $_SESSION['studentID'] ?? null;
+if (!$studentID) {
+    header('Location: login.php');
+    exit;
 }
 
-$message = '';
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    if (isset($_POST['save_profile'])) {
-        $profile['first_name'] = trim($_POST['first_name'] ?? $profile['first_name']);
-        $profile['last_name'] = trim($_POST['last_name'] ?? $profile['last_name']);
-        $profile['email'] = trim($_POST['email'] ?? $profile['email']);
-        $profile['telephone'] = trim($_POST['telephone'] ?? $profile['telephone']);
-        file_put_contents($profile_file, json_encode($profile, JSON_PRETTY_PRINT));
-        $message = 'Profile updated successfully.';
-    }
-    if (isset($_POST['delete_account'])) {
-        unlink($profile_file);
+$toastMsg = '';
+$toastType = 'success';
+
+// Fetch Current Profile Data
+$profile = [
+    'first_name' => '',
+    'last_name' => '',
+    'email' => '',
+    'password' => '',
+    'phoneNo' => ''
+];
+
+try {
+    $stmt = $conn->prepare('SELECT "firstName", "lastName", "email", "password", "phoneNo" FROM "Student" WHERE "studentID" = :studentID');
+    $stmt->execute([':studentID' => $studentID]);
+    $studentData = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if ($studentData) {
         $profile = [
-            'first_name' => '',
-            'last_name' => '',
-            'email' => '',
-            'telephone' => '',
+            'first_name' => $studentData['firstName'] ?? '',
+            'last_name'  => $studentData['lastName'] ?? '',
+            'email'      => $studentData['email'] ?? '',
+            'password'   => $studentData['password'] ?? '',
+            'phoneNo'    => $studentData['phoneNo'] ?? ''
         ];
-        $message = 'Account deleted. Profile data reset.';
+    }
+} catch (PDOException $e) {
+    $toastMsg = 'Failed to load profile data.';
+    $toastType = 'error';
+}
+
+// Handle Form Submissions
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    
+    // ACTION: UPDATE PERSONAL INFO
+    if (isset($_POST['update_profile'])) {
+        $firstName = trim($_POST['first_name'] ?? '');
+        $lastName = trim($_POST['last_name'] ?? '');
+        $phoneNo = trim($_POST['phoneNo'] ?? '');
+
+        if ($firstName && $lastName) {
+            try {
+                $updateStmt = $conn->prepare('
+                    UPDATE "Student" 
+                    SET "firstName" = :firstName, 
+                        "lastName" = :lastName, 
+                        "phoneNo" = :phoneNo 
+                    WHERE "studentID" = :studentID
+                ');
+                $updateStmt->execute([
+                    ':firstName' => $firstName,
+                    ':lastName'  => $lastName,
+                    ':phoneNo'   => $phoneNo,
+                    ':studentID' => $studentID
+                ]);
+                
+                $profile['first_name'] = $firstName;
+                $profile['last_name'] = $lastName;
+                $profile['phoneNo'] = $phoneNo;
+                
+                if (isset($_SESSION['firstName'])) {
+                    $_SESSION['firstName'] = $firstName;
+                }
+                
+                $toastMsg = 'Personal information updated successfully.';
+                $toastType = 'success';
+            } catch (PDOException $e) {
+                $toastMsg = 'Failed to update profile information.';
+                $toastType = 'error';
+            }
+        } else {
+            $toastMsg = 'First Name and Last Name are required.';
+            $toastType = 'error';
+        }
+    }
+    
+    // ACTION: CHANGE PASSWORD
+    if (isset($_POST['change_password'])) {
+        $currentPassword = $_POST['current_password'] ?? '';
+        $newPassword = $_POST['new_password'] ?? '';
+        $confirmPassword = $_POST['confirm_password'] ?? '';
+
+        if (!$currentPassword || !$newPassword || !$confirmPassword) {
+            $toastMsg = 'All password fields are required.';
+            $toastType = 'error';
+        } elseif ($newPassword !== $confirmPassword) {
+            $toastMsg = 'New password and confirm password do not match.';
+            $toastType = 'error';
+        } elseif (strlen($newPassword) < 8) {
+            $toastMsg = 'New password must be at least 8 characters long.';
+            $toastType = 'error';
+        } else {
+            $isPasswordCorrect = password_verify($currentPassword, $profile['password']) || $currentPassword === $profile['password'];
+
+            if (!$isPasswordCorrect) {
+                $toastMsg = 'Incorrect current password.';
+                $toastType = 'error';
+            } else {
+                try {
+                    $hashedPassword = password_hash($newPassword, PASSWORD_DEFAULT);
+                    $pwdStmt = $conn->prepare('UPDATE "Student" SET "password" = :password WHERE "studentID" = :studentID');
+                    $pwdStmt->execute([
+                        ':password'  => $hashedPassword,
+                        ':studentID' => $studentID
+                    ]);
+                    
+                    $profile['password'] = $hashedPassword;
+                    $toastMsg = 'Password changed successfully.';
+                    $toastType = 'success';
+                } catch (PDOException $e) {
+                    $toastMsg = 'Failed to update password. Please try again.';
+                    $toastType = 'error';
+                }
+            }
+        }
     }
 }
 ?>
-<!doctype html>
+
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>PlanGenius — Profile</title>
-  <link rel="stylesheet" href="css/style.css">
-  <script src="https://unpkg.com/@phosphor-icons/web"></script>
-  <style>
-    .content-wrap { padding: 28px; }
-    .page-title { font-size: 32px; margin: 0; }
-    .page-subtitle { color: #7b7f87; margin: 8px 0 20px; }
-    .card { background: #fff; border: 1px solid #eef2f6; border-radius: 22px; padding: 32px; max-width: 880px; }
-    .card h2 { margin: 0 0 8px; }
-    .card p { color: #7b7f87; margin: 0 0 28px; }
-    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; }
-    .field { margin-bottom: 20px; }
-    .field label { display: block; font-weight: 700; margin-bottom: 8px; }
-    .field input { width: 100%; padding: 14px 16px; border: 1px solid #d1d5db; border-radius: 14px; font-size: 15px; }
-    .buttons { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 16px; }
-    .btn { padding: 14px 28px; border-radius: 14px; border: none; cursor: pointer; font-weight: 700; }
-    .btn-primary { background: #060412; color: #fff; }
-    .btn-danger { background: #dc3545; color: #fff; }
-    .message { margin-bottom: 20px; padding: 16px 18px; border-radius: 14px; background: #ecfdf5; color: #166534; border: 1px solid #d1fae5; }
-    @media (max-width: 800px) { .row { grid-template-columns: 1fr; } }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Profile - PlanGenius</title>
+    <link rel="stylesheet" href="css/style.css">
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
 </head>
 <body>
-  <?php include 'includes/sidebar.php'; ?>
-  <main class="main-content">
-    <?php include 'includes/header.php'; ?>
+    <?php 
+    $current_page = 'profile';
+    include 'includes/sidebar.php'; 
+    ?>
 
-    <div class="content-wrap">
-      <div class="page-header">
-        <h1 class="page-title">Profile Management</h1>
-        <p class="page-subtitle">View, update, or delete your profile information</p>
-      </div>
+    <main class="main-content">
+        <?php include 'includes/header.php'; ?>
 
-      <div class="card">
-        <h2>Personal Information</h2>
-        <p>Update your personal details here.</p>
-        <?php if ($message): ?><div class="message"><?php echo htmlspecialchars($message); ?></div><?php endif; ?>
-        <form method="post">
-          <div class="row">
-            <div class="field">
-              <label for="first_name">First Name</label>
-              <input id="first_name" name="first_name" type="text" value="<?php echo htmlspecialchars($profile['first_name']); ?>" required>
+        <div class="dashboard-container">
+            <div class="page-header">
+                <div>
+                    <h1 class="page-title">Personal Profile</h1>
+                    <p class="page-subtitle">View and manage your account details</p>
+                </div>
             </div>
-            <div class="field">
-              <label for="last_name">Last Name</label>
-              <input id="last_name" name="last_name" type="text" value="<?php echo htmlspecialchars($profile['last_name']); ?>" required>
+
+            <div class="profile-container">
+                
+                <div class="profile-card">
+                    <h2 class="profile-card-title"><i class="ph ph-user-circle"></i> Personal Information</h2>
+
+                    <form method="POST" action="profile.php">
+                        <div class="form-row">
+                            <div class="form-group" style="margin-bottom: 0;">
+                                <label for="first_name">First Name</label>
+                                <input id="first_name" name="first_name" type="text" class="form-control" value="<?= htmlspecialchars($profile['first_name']) ?>" required>
+                            </div>
+                            <div class="form-group" style="margin-bottom: 0;">
+                                <label for="last_name">Last Name</label>
+                                <input id="last_name" name="last_name" type="text" class="form-control" value="<?= htmlspecialchars($profile['last_name']) ?>" required>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="email">Email Address</label>
+                            <input id="email" name="email" type="email" class="form-control" value="<?= htmlspecialchars($profile['email']) ?>" readonly title="Email cannot be changed">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="phoneNo">Phone Number</label>
+                            <input id="phoneNo" name="phoneNo" type="tel" class="form-control" value="<?= htmlspecialchars($profile['phoneNo']) ?>">
+                        </div>
+
+                        <div class="buttons-group">
+                            <button type="submit" name="update_profile" class="btn btn-primary">
+                                <i class="ph ph-floppy-disk"></i> Update Profile
+                            </button>
+                        </div>
+                    </form>
+                </div>
+
+                <div class="profile-card">
+                    <h2 class="profile-card-title"><i class="ph ph-lock-key"></i> Change Password</h2>
+
+                    <form method="POST" action="profile.php">
+                        <div class="form-group">
+                            <label for="current_password">Current Password</label>
+                            <input id="current_password" name="current_password" type="password" class="form-control" required>
+                        </div>
+
+                        <div class="form-row">
+                            <div class="form-group" style="margin-bottom: 0;">
+                                <label for="new_password">New Password</label>
+                                <input id="new_password" name="new_password" type="password" class="form-control" required>
+                            </div>
+                            <div class="form-group" style="margin-bottom: 0;">
+                                <label for="confirm_password">Confirm New Password</label>
+                                <input id="confirm_password" name="confirm_password" type="password" class="form-control" required>
+                            </div>
+                        </div>
+                        <div class="password-requirements">
+                            Password must be at least 8 characters long.
+                        </div>
+
+                        <div class="buttons-group">
+                            <button type="submit" name="change_password" class="btn btn-primary">
+                                <i class="ph ph-shield-check"></i> Update Password
+                            </button>
+                        </div>
+                    </form>
+                </div>
+
             </div>
-          </div>
+        </div>
 
-          <div class="field">
-            <label for="email">Email Address</label>
-            <input id="email" name="email" type="email" value="<?php echo htmlspecialchars($profile['email']); ?>" required>
-          </div>
+        <!-- Consistent Notification Toast Structure -->
+        <div class="notification-toast" id="notificationToast">
+            <i class="ph-fill ph-check-circle"></i> <span id="notificationMessage"></span>
+        </div>
+    </main>
 
-          <div class="field">
-            <label for="telephone">Telephone Number</label>
-            <input id="telephone" name="telephone" type="tel" value="<?php echo htmlspecialchars($profile['telephone']); ?>" required>
-          </div>
+    <script>
+        let notificationTimeout = null;
 
-          <div class="buttons">
-            <button type="submit" name="save_profile" class="btn btn-primary">Save Changes</button>
-            <button type="submit" name="delete_account" class="btn btn-danger" onclick="return confirm('Delete your profile data? This cannot be undone.')">Delete Account</button>
-          </div>
-        </form>
-      </div>
-    </div>
+        function showNotification(message, type = 'success') {
+            const toast = document.getElementById('notificationToast');
+            const msgEl = document.getElementById('notificationMessage');
+            const iconEl = toast ? toast.querySelector('i') : null;
 
-    <button class="help-btn"><i class="ph ph-question"></i></button>
-  </main>
+            if (!toast || !msgEl) return;
+
+            // Clear any active timeout to prevent multi-click glitches
+            if (notificationTimeout) {
+                clearTimeout(notificationTimeout);
+            }
+
+            msgEl.innerText = message;
+            if (iconEl) {
+                iconEl.className = type === 'error' ? 'ph-fill ph-warning-circle' : 'ph-fill ph-check-circle';
+            }
+
+            const cls = type === 'error' ? 'error' : 'success';
+            toast.classList.remove('success', 'error');
+            toast.classList.add(cls, 'show');
+
+            notificationTimeout = setTimeout(() => {
+                toast.classList.remove('show', 'success', 'error');
+            }, 3000);
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            const serverMessage = <?= json_encode($toastMsg) ?>;
+            const serverType = <?= json_encode($toastType) ?>;
+            if (serverMessage) {
+                showNotification(serverMessage, serverType);
+            }
+        });
+    </script>
 </body>
 </html>
