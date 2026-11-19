@@ -4,7 +4,7 @@
         "date": "2026-02-10",
         "title": "Assignment due: Research Paper",
         "message": "Research Paper for Data Structures is due in 3 days.",
-        "read": false
+        "read": true
     },
     {
         "id": 2,

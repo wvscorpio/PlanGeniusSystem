@@ -81,7 +81,7 @@ if (!move_uploaded_file($file['tmp_name'], $filePath)) {
 
 // Run Python extraction
 $pythonPath = 'python'; // or 'python3' depending on system
-$command = escapeshellcmd("$pythonPath data_processor.py --extract-pdf " . escapeshellarg($filePath));
+$command = escapeshellcmd($pythonPath) . " " . escapeshellarg(__DIR__ . '/processor/assignment_processor.py') . " --extract-pdf " . escapeshellarg($filePath);
 $output = shell_exec($command . ' 2>&1');
 
 if ($output === null) {

@@ -8,18 +8,17 @@ if (!$studentID) {
     exit;
 }
 
-// ------------------------------------------------------------------
 // 1. DYNAMIC DATABASE CALCULATION FOR STATS
-// ------------------------------------------------------------------
 $totalAssignments = 0;
 $upcomingAssignments = 0;
 $completedAssignments = 0;
+$pastDueAssignments = 0;
 
 $totalExams = 0;
 $upcomingExams = 0;
 $completedExams = 0;
 
-$studyHours = 0; // Set up later if you implement time-tracking
+$studyHours = 0;
 
 // A. FETCH ASSIGNMENT STATS (Includes Tests & Quizzes)
 try {
@@ -27,11 +26,13 @@ try {
         SELECT 
             COUNT(*) as total,
             SUM(CASE WHEN a."taskStatus" = \'Completed\' THEN 1 ELSE 0 END) as completed,
-            SUM(CASE WHEN a."taskStatus" != \'Completed\' AND a."dueDate" >= CURRENT_DATE THEN 1 ELSE 0 END) as upcoming
+            SUM(CASE WHEN a."taskStatus" != \'Completed\' AND a."dueDate" >= CURRENT_DATE THEN 1 ELSE 0 END) as upcoming,
+            SUM(CASE WHEN a."taskStatus" != \'Completed\' AND a."dueDate" < CURRENT_DATE THEN 1 ELSE 0 END) as past_due
         FROM "Assignment" a
         JOIN "Course" c ON a."courseID" = c."courseID"
         JOIN "SemesterPlan" s ON c."semesterID" = s."semesterID"
         WHERE s."studentID" = :studentID
+            AND s."startDate" <= CURRENT_DATE AND s."endDate" >= CURRENT_DATE
     ');
     $assQuery->execute([':studentID' => $studentID]);
     $assStats = $assQuery->fetch(PDO::FETCH_ASSOC);
@@ -40,21 +41,22 @@ try {
         $totalAssignments = (int)$assStats['total'];
         $completedAssignments = (int)$assStats['completed'];
         $upcomingAssignments = (int)$assStats['upcoming'];
+        $pastDueAssignments = (int)($assStats['past_due'] ?? 0);
     }
 } catch (PDOException $e) {}
 
-// B. FETCH EXAM STATS (From separate Exam table)
+// B. FETCH EXAM STATS (Connected to "Exam" Table)
 try {
-    // Note: If you haven't created the "Exam" table yet, this will safely fail and leave Exam stats at 0.
     $examQuery = $conn->prepare('
         SELECT 
             COUNT(*) as total,
-            SUM(CASE WHEN e."status" = \'Completed\' THEN 1 ELSE 0 END) as completed,
-            SUM(CASE WHEN e."status" != \'Completed\' AND e."examDate" >= CURRENT_DATE THEN 1 ELSE 0 END) as upcoming
+            SUM(CASE WHEN e."examStatus" = \'Completed\' THEN 1 ELSE 0 END) as completed,
+            SUM(CASE WHEN e."examStatus" != \'Completed\' AND e."examDate" >= CURRENT_DATE THEN 1 ELSE 0 END) as upcoming
         FROM "Exam" e
         JOIN "Course" c ON e."courseID" = c."courseID"
         JOIN "SemesterPlan" s ON c."semesterID" = s."semesterID"
         WHERE s."studentID" = :studentID
+          AND s."startDate" <= CURRENT_DATE AND s."endDate" >= CURRENT_DATE
     ');
     $examQuery->execute([':studentID' => $studentID]);
     $examStats = $examQuery->fetch(PDO::FETCH_ASSOC);
@@ -62,13 +64,32 @@ try {
     if ($examStats) {
         $totalExams = (int)$examStats['total'];
         $completedExams = (int)$examStats['completed'];
-        $upcomingExams = (int)$examStats['upcoming'];
+        $upcomingExams = (int)($examStats['upcoming'] ?? 0);
     }
-} catch (PDOException $e) {
-    // Safely ignore if the Exam table does not exist yet.
-}
+} catch (PDOException $e) {}
 
-// C. CALCULATE OVERALL PROGRESS
+// C. DYNAMICALLY CALCULATE ACTUAL TOTAL STUDY HOURS
+try {
+    // Count only completed study tasks/sessions for the student
+    $studyTaskQuery = $conn->prepare('
+        SELECT COUNT(*)
+        FROM public."StudyTask" st
+        JOIN "Exam" e ON st."examID" = e."examID"
+        JOIN "Course" c ON e."courseID" = c."courseID"
+        JOIN "SemesterPlan" s ON c."semesterID" = s."semesterID"
+        WHERE s."studentID" = :studentID
+          AND s."startDate" <= CURRENT_DATE AND s."endDate" >= CURRENT_DATE
+          AND (st."isCompleted" = true OR st."isCompleted" = \'true\' OR st."isCompleted" = \'t\' OR st."isCompleted" = \'1\')
+    ');
+    $studyTaskQuery->execute([':studentID' => $studentID]);
+    $completedStudyTasks = (int)($studyTaskQuery->fetchColumn() ?? 0);
+
+    // Multiply completed sessions by duration (2 hours per session)
+    $sessionDuration = 2; 
+    $studyHours = $completedStudyTasks * $sessionDuration;
+} catch (PDOException $e) {}
+
+// D. CALCULATE OVERALL PROGRESS
 $totalTasks = $totalAssignments + $totalExams;
 $completedTasks = $completedAssignments + $completedExams;
 $completionRate = $totalTasks > 0 ? round(($completedTasks / $totalTasks) * 100) : 0;
@@ -80,14 +101,17 @@ $completionRate = $totalTasks > 0 ? round(($completedTasks / $totalTasks) * 100)
 $upcomingAssList = [];
 $upcomingExamList = [];
 
-// Fetch Upcoming Assignments
+// Fetch Upcoming Assignments (Cleaned & Active Semester Only)
 try {
     $listQuery = $conn->prepare('
         SELECT a.*, c."courseCode" 
         FROM "Assignment" a
         JOIN "Course" c ON a."courseID" = c."courseID"
         JOIN "SemesterPlan" s ON c."semesterID" = s."semesterID"
-        WHERE s."studentID" = :studentID AND a."taskStatus" != \'Completed\' AND a."dueDate" >= CURRENT_DATE
+        WHERE s."studentID" = :studentID 
+          AND s."startDate" <= CURRENT_DATE AND s."endDate" >= CURRENT_DATE
+          AND a."taskStatus" != \'Completed\' 
+          AND a."dueDate" >= CURRENT_DATE
         ORDER BY a."dueDate" ASC
         LIMIT 5
     ');
@@ -95,22 +119,23 @@ try {
     $upcomingAssList = $listQuery->fetchAll(PDO::FETCH_ASSOC);
 } catch (PDOException $e) {}
 
-// Fetch Upcoming Exams
+// Fetch Upcoming Exams (Active Semester Added)
 try {
     $examListQuery = $conn->prepare('
         SELECT e.*, c."courseCode" 
         FROM "Exam" e
         JOIN "Course" c ON e."courseID" = c."courseID"
         JOIN "SemesterPlan" s ON c."semesterID" = s."semesterID"
-        WHERE s."studentID" = :studentID AND e."status" != \'Completed\' AND e."examDate" >= CURRENT_DATE
+        WHERE s."studentID" = :studentID 
+          AND s."startDate" <= CURRENT_DATE AND s."endDate" >= CURRENT_DATE
+          AND e."examStatus" != \'Completed\' 
+          AND e."examDate" >= CURRENT_DATE
         ORDER BY e."examDate" ASC
         LIMIT 5
     ');
     $examListQuery->execute([':studentID' => $studentID]);
     $upcomingExamList = $examListQuery->fetchAll(PDO::FETCH_ASSOC);
-} catch (PDOException $e) {
-    // Safely ignore if the Exam table does not exist yet.
-}
+} catch (PDOException $e) {}
 ?>
 
 <!DOCTYPE html>
@@ -122,7 +147,6 @@ try {
     <link rel="stylesheet" href="css/style.css">
     <script src="https://unpkg.com/@phosphor-icons/web"></script>
     <style>
-        /* Progress Overview Styling */
         .progress-overview-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 24px; margin-bottom: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
         .progress-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
         .progress-title { margin: 0; font-size: 18px; font-weight: 700; color: #1e293b; }
@@ -131,10 +155,6 @@ try {
         .progress-fill { height: 100%; background: #10b981; width: <?= $completionRate ?>%; transition: width 0.8s ease-in-out; }
         .progress-subtext { margin: 12px 0 0 0; font-size: 14px; color: #64748b; }
 
-        /* Quick Navigation Styling */
-        .quick-nav-section { margin-bottom: 30px; }
-        .quick-nav-title { font-size: 18px; color: #1e293b; margin-bottom: 16px; font-weight: 700; }
-        .quick-nav-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; }
         .nav-card { display: flex; align-items: center; gap: 16px; padding: 20px; background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; text-decoration: none; color: inherit; transition: all 0.2s ease; box-shadow: 0 1px 3px rgba(0,0,0,0.05); cursor: pointer; }
         .nav-card:hover { transform: translateY(-3px); box-shadow: 0 6px 12px rgba(0,0,0,0.1); border-color: #cbd5e1; }
         .nav-icon { width: 50px; height: 50px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 26px; }
@@ -177,42 +197,33 @@ try {
                 <p class="progress-subtext">You have completed <strong><?= $completedTasks ?></strong> out of <strong><?= $totalTasks ?></strong> total tasks and exams.</p>
             </div>
 
-            <div class="stats-grid" style="margin-bottom: 30px;">
-                <div class="stat-card">
+           <div class="stats-grid" style="margin-bottom: 30px;">
+                <a href="assignments.php" class="stat-card" style="text-decoration: none; color: inherit; cursor: pointer; transition: all 0.2s ease;">
                     <div class="stat-header">
                         <span class="stat-title">Total Assignments</span>
                         <i class="ph ph-file-text stat-icon" style="color: #3b82f6;"></i>
                     </div>
                     <div class="stat-value"><?= $totalAssignments ?></div>
-                    <div class="stat-label">Tasks, Quizzes, & Labs</div>
-                </div>
+                    <div class="stat-label">Assignments, Project and Lab</div>
+                </a>
 
-                <div class="stat-card">
+                <a href="assignments.php?filter=Past+Due" class="stat-card" style="text-decoration: none; color: inherit; cursor: pointer; transition: all 0.2s ease;">
+                    <div class="stat-header">
+                        <span class="stat-title" style="<?= $pastDueAssignments > 0 ? 'color: #991b1b; font-weight: 600;' : '' ?>">Past Due Assignments</span>
+                        <i class="ph ph-warning-circle stat-icon" style="color: #ef4444; font-size: 22px;"></i>
+                    </div>
+                    <div class="stat-value" style="<?= $pastDueAssignments > 0 ? 'color: #dc2626;' : '' ?>"><?= $pastDueAssignments ?></div>
+                    <div class="stat-label">Overdue assignments, project and lab deadlines</div>
+                </a>
+
+                <a href="exam.php" class="stat-card" style="text-decoration: none; color: inherit; cursor: pointer; transition: all 0.2s ease; <?= $upcomingExams > 0 ? 'background-color: #fef2f2; border-color: #fecaca;' : '' ?>">
                     <div class="stat-header">
                         <span class="stat-title">Total Exams</span>
                         <i class="ph ph-exam stat-icon" style="color: #ef4444;"></i>
                     </div>
                     <div class="stat-value"><?= $totalExams ?></div>
                     <div class="stat-label">Major Examinations</div>
-                </div>
-
-                <div class="stat-card">
-                    <div class="stat-header">
-                        <span class="stat-title">Upcoming Assignments</span>
-                        <i class="ph ph-clock stat-icon" style="color: #f59e0b;"></i>
-                    </div>
-                    <div class="stat-value"><?= $upcomingAssignments ?></div>
-                    <div class="stat-label">Tasks to submit</div>
-                </div>
-
-                <div class="stat-card">
-                    <div class="stat-header">
-                        <span class="stat-title">Upcoming Exams</span>
-                        <i class="ph ph-warning-circle stat-icon" style="color: #ec4899;"></i>
-                    </div>
-                    <div class="stat-value"><?= $upcomingExams ?></div>
-                    <div class="stat-label">Exams to prepare for</div>
-                </div>
+                </a>
 
                 <div class="stat-card">
                     <div class="stat-header">
@@ -220,32 +231,7 @@ try {
                         <i class="ph ph-timer stat-icon" style="color: #8b5cf6;"></i>
                     </div>
                     <div class="stat-value"><?= $studyHours ?>h</div>
-                    <div class="stat-label">Estimated total logged</div>
-                </div>
-            </div>
-
-            <div class="quick-nav-section">
-                <h2 class="quick-nav-title">Quick Navigation</h2>
-                <div class="quick-nav-grid">
-                    <a href="assignments.php" class="nav-card">
-                        <div class="nav-icon assignments">
-                            <i class="ph-fill ph-file-text"></i>
-                        </div>
-                        <div class="nav-text">
-                            <h3>Manage Assignments</h3>
-                            <p>Track tasks, labs, tests & quizzes</p>
-                        </div>
-                    </a>
-
-                    <a href="exam.php" class="nav-card">
-                        <div class="nav-icon exams">
-                            <i class="ph-fill ph-exam"></i>
-                        </div>
-                        <div class="nav-text">
-                            <h3>Manage Exams</h3>
-                            <p>Review upcoming major examinations</p>
-                        </div>
-                    </a>
+                    <div class="stat-label">Completed study time</div>
                 </div>
             </div>
 
@@ -283,7 +269,7 @@ try {
                             <?php foreach ($upcomingExamList as $item): ?>
                                 <div class="list-item">
                                     <div class="item-info">
-                                        <span class="item-title"><?= htmlspecialchars($item['examTitle'] ?? 'Exam') ?></span>
+                                        <span class="item-title"><?= htmlspecialchars($item['examType'] ?? 'Exam') ?></span>
                                         <span class="item-course"><?= htmlspecialchars($item['courseCode']) ?></span>
                                     </div>
                                     <div class="item-date">Date: <?= isset($item['examDate']) ? date('M d', strtotime($item['examDate'])) : 'TBD' ?></div>

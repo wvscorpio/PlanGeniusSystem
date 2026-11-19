@@ -149,7 +149,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && strpos($_SERVER['CONTENT_TYPE'] ?? 
             }
 
             $overlapStmt = $conn->prepare(
-                'SELECT 1 FROM "SemesterPlan" WHERE "studentID" = :studentID AND "semesterID" <> :semesterID AND NOT ("endDate" < :startDate OR "startDate" > :endDate) LIMIT 1'
+                'SELECT "semesterName" FROM "SemesterPlan" 
+                WHERE "studentID" = :studentID 
+                AND "semesterID" <> :semesterID 
+                AND NOT ("endDate" < :startDate OR "startDate" > :endDate) 
+                LIMIT 1'
             );
             $overlapStmt->execute([
                 ':studentID' => $studentID,
@@ -157,8 +161,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && strpos($_SERVER['CONTENT_TYPE'] ?? 
                 ':startDate' => $startDate,
                 ':endDate' => $endDate
             ]);
-            if ($overlapStmt->fetch()) {
-                echo json_encode(['success' => false, 'error' => 'Semester dates overlap an existing semester']);
+            
+            $overlappingSem = $overlapStmt->fetch(PDO::FETCH_ASSOC);
+            if ($overlappingSem) {
+                echo json_encode([
+                    'success' => false, 
+                    'error' => 'Semester dates overlap with "' . $overlappingSem['semesterName'] . '".'
+                ]);
                 exit;
             }
 
@@ -271,26 +280,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && strpos($_SERVER['CONTENT_TYPE'] ?? 
         }
     }
 
-    echo json_encode(['success' => false, 'error' => 'Unknown action']);
-    exit;
-}
-
-// Fetch existing semesters and their courses for page layout
-$semesters = [];
-try {
-    $stmt = $conn->prepare('SELECT * FROM "SemesterPlan" WHERE "studentID" = :studentID ORDER BY "startDate" DESC');
-    $stmt->execute([':studentID' => $studentID]);
-    $semesters = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    
-    foreach ($semesters as &$semester) {
-        $courseStmt = $conn->prepare('SELECT * FROM "Course" WHERE "semesterID" = :semesterID');
-        $courseStmt->execute([':semesterID' => $semester['semesterID']]);
-        $semester['courses'] = $courseStmt->fetchAll(PDO::FETCH_ASSOC);
-        $semester['status'] = getSemesterStatus($semester['startDate'], $semester['endDate']);
+        echo json_encode(['success' => false, 'error' => 'Unknown action']);
+        exit;
     }
-} catch (PDOException $e) {
-    $errors[] = 'Failed to fetch semesters: ' . $e->getMessage();
-}
+
+    // Fetch existing semesters and their courses for page layout
+    $semesters = [];
+    try {
+        $stmt = $conn->prepare('SELECT * FROM "SemesterPlan" WHERE "studentID" = :studentID ORDER BY "startDate" DESC');
+        $stmt->execute([':studentID' => $studentID]);
+        $semesters = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        
+        foreach ($semesters as &$semester) {
+            $courseStmt = $conn->prepare('SELECT * FROM "Course" WHERE "semesterID" = :semesterID');
+            $courseStmt->execute([':semesterID' => $semester['semesterID']]);
+            $semester['courses'] = $courseStmt->fetchAll(PDO::FETCH_ASSOC);
+            $semester['status'] = getSemesterStatus($semester['startDate'], $semester['endDate']);
+        }
+    } catch (PDOException $e) {
+        $errors[] = 'Failed to fetch semesters: ' . $e->getMessage();
+    }
 ?>
 
 <!DOCTYPE html>
@@ -318,12 +327,12 @@ try {
                     <p class="page-subtitle">Manage your study plans, semesters, and courses</p>
                 </div>
                 <button class="btn btn-primary" onclick="openModal('addSemesterModal')">
-                    <i class="ph ph-plus"></i> Add Semester
+                    <i class="ph ph-plus"></i> Add Semester Plan
                 </button>
             </div>
 
             <div class="empty-state-card" id="emptyState" style="<?= count($semesters) > 0 ? 'display:none' : '' ?>">
-                No semesters created yet. Click "Add Semester" to get started!
+                No semesters created yet. Click "Add Semester Plan" to get started!
             </div>
 
             <div class="semesters-list" id="semestersList">
@@ -369,7 +378,7 @@ try {
             <form id="addSemesterForm" onsubmit="handleAddSemester(event)">
                 <div class="form-group">
                     <label>Semester Name</label>
-                    <input id="semesterName" name="semesterName" type="text" class="form-control" placeholder="e.g., Year 1 2025/2026" required>
+                    <input id="semesterName" name="semesterName" type="text" class="form-control" placeholder="e.g., Year 1 Sem 1" required>
                 </div>
                 <div class="form-group">
                     <label>Start Date</label>
@@ -473,15 +482,31 @@ try {
             document.getElementById('modalOverlay').classList.remove('active');
         }
 
+        let notificationTimeout = null;
+
         function showNotification(message, type = 'success') {
             const toast = document.getElementById('notificationToast');
-            document.getElementById('notificationMessage').innerText = message;
+            const msgEl = document.getElementById('notificationMessage');
+            const iconEl = toast ? toast.querySelector('i') : null;
+
+            if (!toast || !msgEl) return;
+
+            // Reset timer on rapid clicks to prevent premature hiding
+            if (notificationTimeout) {
+                clearTimeout(notificationTimeout);
+            }
+
+            msgEl.innerText = message;
+            if (iconEl) {
+                iconEl.className = type === 'error' ? 'ph-fill ph-warning-circle' : 'ph-fill ph-check-circle';
+            }
+
             const cls = type === 'error' ? 'error' : 'success';
             toast.classList.remove('success', 'error');
             toast.classList.add(cls, 'show');
-            setTimeout(() => {
-                toast.classList.remove('show');
-                toast.classList.remove(cls);
+
+            notificationTimeout = setTimeout(() => {
+                toast.classList.remove('show', 'success', 'error');
             }, 3000);
         }
 
@@ -559,7 +584,7 @@ try {
                     <div class="semester-header">
                         <div class="semester-info">
                             <h3 class="semester-title">${escapeHtml(semester.semesterName)}</h3>
-                            <p class="semester-dates">${escapeHtml(semester.startDate)} to ${escapeHtml(semester.endDate)}</p>
+                            <p class="semester-dates">${escapeHtml(formatDate(semester.startDate))} to ${escapeHtml(formatDate(semester.endDate))}</p>
                         </div>
                         <div class="semester-actions">
                             <span class="status-badge ${statusClass}">${escapeHtml(status)}</span>
@@ -581,6 +606,16 @@ try {
                     </div>
                 </div>
             `;
+        }
+
+        function formatDate(dateString) {
+            if (!dateString) return '';
+            const date = new Date(dateString + 'T00:00:00');
+            return date.toLocaleDateString('en-US', {
+                month: 'short',
+                day: 'numeric',
+                year: 'numeric'
+            });
         }
 
         function renderSemester(semester) {
@@ -635,7 +670,7 @@ try {
                 const card = document.getElementById(semId);
                 if (card) {
                     card.querySelector('.semester-title').innerText = data.semester.semesterName;
-                    card.querySelector('.semester-dates').innerText = `${data.semester.startDate} to ${data.semester.endDate}`;
+                    card.querySelector('.semester-dates').innerText = `${formatDate(data.semester.startDate)} to ${formatDate(data.semester.endDate)}`;
                     const badge = card.querySelector('.status-badge');
                     badge.innerText = data.semester.status;
                     badge.className = 'status-badge ' + getStatusClass(data.semester.status);
@@ -720,7 +755,6 @@ try {
             }
         });
 
-        // FIXED: Now accurately maps to consolidated handling logic inside this file
         async function handleAddSemester(e) {
             e.preventDefault();
             
@@ -737,11 +771,7 @@ try {
                 const response = await fetch('add_semester.php', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        semesterName: name,
-                        startDate,
-                        endDate
-                    })
+                    body: JSON.stringify({ semesterName: name, startDate, endDate })
                 });
 
                 const data = await response.json();
@@ -752,11 +782,17 @@ try {
                 form.reset();
                 closeModal('addSemesterModal');
                 showNotification('Semester added successfully!');
+
+                // AUTO-REFRESH AFTER 1 SECOND
+                setTimeout(() => {
+                    window.location.reload();
+                }, 1000);
+
             } catch (err) {
                 console.error(err);
                 showNotification(err.message || 'Error adding semester', 'error');
             } finally {
-                btn.innerText = "Add Semester";
+                btn.innerText = "Add Semester Plan";
                 btn.disabled = false;
             }
         }

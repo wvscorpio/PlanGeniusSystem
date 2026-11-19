@@ -136,79 +136,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <title>Profile - PlanGenius</title>
     <link rel="stylesheet" href="css/style.css">
     <script src="https://unpkg.com/@phosphor-icons/web"></script>
-    <style>
-        .profile-container {
-            display: flex;
-            flex-direction: column;
-            gap: 24px;
-            max-width: 650px;
-        }
-        .profile-card {
-            background-color: #fff;
-            border: 1px solid #e2e8f0;
-            border-radius: 12px;
-            padding: 30px;
-            box-shadow: var(--shadow-sm);
-        }
-        .profile-card-title {
-            font-size: 18px;
-            font-weight: 600;
-            color: #1e293b;
-            margin-bottom: 20px;
-            padding-bottom: 10px;
-            border-bottom: 2px solid #f1f5f9;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        .form-row {
-            display: flex;
-            gap: 20px;
-            margin-bottom: 20px;
-        }
-        .form-group {
-            flex: 1;
-            margin-bottom: 20px;
-        }
-        .form-group label {
-            display: block;
-            margin-bottom: 8px;
-            font-weight: 500;
-            font-size: 14px;
-            color: #334155;
-        }
-        .form-control {
-            width: 100%;
-            padding: 10px 14px;
-            border: 1px solid #cbd5e1;
-            border-radius: 8px;
-            font-size: 15px;
-            color: #1e293b;
-            transition: border-color 0.2s;
-        }
-        .form-control:focus {
-            outline: none;
-            border-color: #3b82f6;
-            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
-        }
-        .form-control[readonly] {
-            background-color: #f8fafc;
-            color: #64748b;
-            cursor: not-allowed;
-            border-color: #e2e8f0;
-        }
-        .buttons-group {
-            display: flex;
-            gap: 12px;
-            margin-top: 10px;
-        }
-        .password-requirements {
-            font-size: 12px;
-            color: #64748b;
-            margin-top: -12px;
-            margin-bottom: 20px;
-        }
-    </style>
 </head>
 <body>
     <?php 
@@ -295,27 +222,40 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             </div>
         </div>
+
+        <!-- Consistent Notification Toast Structure -->
+        <div class="notification-toast" id="notificationToast">
+            <i class="ph-fill ph-check-circle"></i> <span id="notificationMessage"></span>
+        </div>
     </main>
 
     <script>
+        let notificationTimeout = null;
+
         function showNotification(message, type = 'success') {
-            let toast = document.querySelector('.notification-toast');
-            if (!toast) {
-                toast = document.createElement('div');
-                toast.className = 'notification-toast';
-                document.body.appendChild(toast);
+            const toast = document.getElementById('notificationToast');
+            const msgEl = document.getElementById('notificationMessage');
+            const iconEl = toast ? toast.querySelector('i') : null;
+
+            if (!toast || !msgEl) return;
+
+            // Clear any active timeout to prevent multi-click glitches
+            if (notificationTimeout) {
+                clearTimeout(notificationTimeout);
             }
-            const icon = type === 'success' 
-                ? '<i class="ph-fill ph-check-circle" style="color: #16a34a;"></i>' 
-                : '<i class="ph-fill ph-warning-circle" style="color: #dc2626;"></i>';
-            
-            toast.innerHTML = `${icon}<span>${message}</span>`;
-            toast.classList.add('show');
-            
-            clearTimeout(toast.timeoutId);
-            toast.timeoutId = setTimeout(() => {
-                toast.classList.remove('show');
-            }, 4000);
+
+            msgEl.innerText = message;
+            if (iconEl) {
+                iconEl.className = type === 'error' ? 'ph-fill ph-warning-circle' : 'ph-fill ph-check-circle';
+            }
+
+            const cls = type === 'error' ? 'error' : 'success';
+            toast.classList.remove('success', 'error');
+            toast.classList.add(cls, 'show');
+
+            notificationTimeout = setTimeout(() => {
+                toast.classList.remove('show', 'success', 'error');
+            }, 3000);
         }
 
         document.addEventListener('DOMContentLoaded', () => {

@@ -9,44 +9,84 @@ if (isset($_SESSION['studentID'])) {
 }
 
 $message = '';
+$step = 1;
+$email = '';
+$securityQuestion = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $email = trim($_POST['email'] ?? '');
-    $newPassword = $_POST['new_password'] ?? '';
-    $confirmPassword = $_POST['confirm_password'] ?? '';
+    $action = $_POST['action'] ?? '';
 
-    if ($email === '' || $newPassword === '' || $confirmPassword === '') {
-        $message = 'All fields are required.';
-    } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-        $message = 'Please enter a valid email address.';
-    } elseif (strlen($newPassword) < 8) {
-        $message = 'Password must be at least 8 characters long.';
-    } elseif ($newPassword !== $confirmPassword) {
-        $message = 'Passwords do not match.';
-    } else {
-        try {
-            $stmt = $conn->prepare('SELECT "studentID" FROM "Student" WHERE "email" = :email LIMIT 1');
-            $stmt->execute([':email' => $email]);
-            $user = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($action === 'verify_email') {
+        $email = trim($_POST['email'] ?? '');
 
-            if ($user) {
-                // Email is valid -> Hash the new password and update the database
-                $hashedPassword = password_hash($newPassword, PASSWORD_DEFAULT);
-                $updateStmt = $conn->prepare('UPDATE "Student" SET "password" = :password WHERE "email" = :email');
-                $updateStmt->execute([
-                    ':password' => $hashedPassword,
-                    ':email' => $email
-                ]);
+        if ($email === '') {
+            $message = 'Please enter your email address.';
+        } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            $message = 'Please enter a valid email address.';
+        } else {
+            try {
+                $stmt = $conn->prepare('SELECT "security_question" FROM "Student" WHERE "email" = :email LIMIT 1');
+                $stmt->execute([':email' => $email]);
+                $user = $stmt->fetch(PDO::FETCH_ASSOC);
 
-                // Set success message and redirect
-                $_SESSION['success_message'] = 'Your password has been successfully reset. Please log in.';
-                header('Location: login.php');
-                exit;
-            } else {
-                $message = 'No account found associated with that email address.';
+                if ($user && !empty($user['security_question'])) {
+                    $securityQuestion = $user['security_question'];
+                    $step = 2;
+                } else {
+                    $message = 'No account found associated with that email address or security question not configured.';
+                }
+            } catch (PDOException $e) {
+                $message = 'Error verifying account. Please try again.';
             }
-        } catch (PDOException $e) {
-            $message = 'Error resetting password. Please try again.';
+        }
+    } elseif ($action === 'reset_password') {
+        $email = trim($_POST['email'] ?? '');
+        $securityQuestion = trim($_POST['security_question'] ?? '');
+        $securityAnswer = trim($_POST['security_answer'] ?? '');
+        $newPassword = $_POST['new_password'] ?? '';
+        $confirmPassword = $_POST['confirm_password'] ?? '';
+
+        if ($email === '' || $securityAnswer === '' || $newPassword === '' || $confirmPassword === '') {
+            $message = 'All fields are required.';
+            $step = 2;
+        } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            $message = 'Please enter a valid email address.';
+            $step = 2;
+        } elseif (strlen($newPassword) < 8) {
+            $message = 'Password must be at least 8 characters long.';
+            $step = 2;
+        } elseif ($newPassword !== $confirmPassword) {
+            $message = 'Passwords do not match.';
+            $step = 2;
+        } else {
+            try {
+                $stmt = $conn->prepare('SELECT "studentID", "security_answer" FROM "Student" WHERE "email" = :email LIMIT 1');
+                $stmt->execute([':email' => $email]);
+                $user = $stmt->fetch(PDO::FETCH_ASSOC);
+
+                $normalizedAnswer = strtolower($securityAnswer);
+
+                if ($user && !empty($user['security_answer']) && password_verify($normalizedAnswer, $user['security_answer'])) {
+                    // Security answer matches -> Hash the new password and update the database
+                    $hashedPassword = password_hash($newPassword, PASSWORD_DEFAULT);
+                    $updateStmt = $conn->prepare('UPDATE "Student" SET "password" = :password, "api_token" = NULL, "api_token_expires_at" = NULL WHERE "email" = :email');
+                    $updateStmt->execute([
+                        ':password' => $hashedPassword,
+                        ':email' => $email
+                    ]);
+
+                    $_SESSION['success_message'] = 'Your password has been successfully reset. Please log in.';
+                    header('Location: login.php');
+                    exit;
+                } else {
+                    // Generic error message without revealing correct details
+                    $message = 'Verification failed. Incorrect security answer.';
+                    $step = 2;
+                }
+            } catch (PDOException $e) {
+                $message = 'Error resetting password. Please try again.';
+                $step = 2;
+            }
         }
     }
 }
@@ -94,6 +134,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     .input{
       width:100%;padding:18px;border-radius:12px;border:none;background:var(--muted);box-sizing:border-box;font-size:15px
     }
+    .input-readonly{
+      background:#e5e7eb;color:#4b5563;cursor:not-allowed;
+    }
     .btn{
       display:block;width:100%;background:var(--black);color:#fff;padding:14px;border-radius:12px;border:none;
       font-weight:700;font-size:16px;margin-top:18px;cursor:pointer
@@ -124,21 +167,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     
     <div class="brand">
       <h1>PlanGenius</h1>
-      <p>Enter your email to reset your password</p>
+      <p><?= $step === 1 ? 'Enter your email to verify identity' : 'Answer your security question to reset password' ?></p>
     </div>
     
-    <form action="forgot_password.php" method="POST">
-      <label for="email">Registered Email</label>
-      <input id="email" name="email" type="email" class="input" placeholder="yourname@example.com" value="<?= htmlspecialchars($_POST['email'] ?? '') ?>" required />
-      
-      <label for="new_password">New Password</label>
-      <input id="new_password" name="new_password" type="password" class="input" placeholder="••••••••" required />
+    <?php if ($step === 1): ?>
+      <form action="forgot_password.php" method="POST">
+        <input type="hidden" name="action" value="verify_email" />
+        
+        <label for="email">Registered Email</label>
+        <input id="email" name="email" type="email" class="input" placeholder="yourname@example.com" value="<?= htmlspecialchars($email) ?>" required />
+        
+        <button type="submit" class="btn">Continue</button>
+      </form>
+    <?php else: ?>
+      <form action="forgot_password.php" method="POST">
+        <input type="hidden" name="action" value="reset_password" />
+        <input type="hidden" name="email" value="<?= htmlspecialchars($email) ?>" />
+        <input type="hidden" name="security_question" value="<?= htmlspecialchars($securityQuestion) ?>" />
 
-      <label for="confirm_password">Confirm New Password</label>
-      <input id="confirm_password" name="confirm_password" type="password" class="input" placeholder="••••••••" required />
-      
-      <button type="submit" class="btn">Reset Password</button>
-    </form>
+        <label for="email_display">Registered Email</label>
+        <input id="email_display" type="email" class="input input-readonly" value="<?= htmlspecialchars($email) ?>" readonly />
+
+        <label for="security_question_display">Security Question</label>
+        <input id="security_question_display" type="text" class="input input-readonly" value="<?= htmlspecialchars($securityQuestion) ?>" readonly />
+
+        <label for="security_answer">Security Answer</label>
+        <input id="security_answer" name="security_answer" type="text" class="input" placeholder="Enter your secret answer" required autofocus />
+
+        <label for="new_password">New Password</label>
+        <input id="new_password" name="new_password" type="password" class="input" placeholder="••••••••" required />
+
+        <label for="confirm_password">Confirm New Password</label>
+        <input id="confirm_password" name="confirm_password" type="password" class="input" placeholder="••••••••" required />
+        
+        <button type="submit" class="btn">Reset Password</button>
+      </form>
+    <?php endif; ?>
 
     <div class="footer">Remembered your password? <a href="login.php">Back to Login</a></div>
   </div>

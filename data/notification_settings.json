@@ -1,5 +1,14 @@
 {
     "email_reminders": true,
     "assignment_reminder_days": 2,
-    "exam_reminder_days": 7
+    "exam_reminder_days": 7,
+    "1": {
+        "email_reminders": true,
+        "assignment_reminders": true,
+        "exam_reminders": true,
+        "study_session_reminders": true,
+        "overdue_reminders": true,
+        "preferred_study_time": "10:00:00",
+        "preferredStudyTime": "10:00:00"
+    }
 }

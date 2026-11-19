@@ -54,7 +54,7 @@ if (!$force) {
     }
 }
 
-try {
+/*try {
     $latestEndStmt = $conn->prepare('SELECT MAX("endDate") AS latestEndDate FROM "SemesterPlan" WHERE "studentID" = :studentID');
     $latestEndStmt->execute([':studentID' => $studentID]);
     $latestEndResult = $latestEndStmt->fetch(PDO::FETCH_ASSOC);
@@ -63,8 +63,33 @@ try {
     if (!$force && $latestEndDate && $startDate <= $latestEndDate) {
         echo json_encode(['success' => false, 'error' => 'Semester dates overlap an existing semester. New semester must start after the latest existing semester end date.']);
         exit;
-    }
+    }*/
 
+        try {
+    // REPLACE lines 44-53 with this overlap validation check:
+    if (!$force) {
+        $overlapStmt = $conn->prepare(
+            'SELECT "semesterName" FROM "SemesterPlan" 
+             WHERE "studentID" = :studentID 
+             AND NOT ("endDate" < :startDate OR "startDate" > :endDate) 
+             LIMIT 1'
+        );
+        $overlapStmt->execute([
+            ':studentID' => $studentID,
+            ':startDate' => $startDate,
+            ':endDate' => $endDate
+        ]);
+        
+        $overlappingSem = $overlapStmt->fetch(PDO::FETCH_ASSOC);
+        if ($overlappingSem) {
+            echo json_encode([
+                'success' => false, 
+                'error' => 'Semester dates overlap with "' . $overlappingSem['semesterName'] . '". Active semesters cannot overlap.'
+            ]);
+            exit;
+        }
+    }
+    
     $check = $conn->prepare('SELECT * FROM "SemesterPlan" WHERE "studentID" = :studentID AND "semesterName" = :semesterName');
     $check->execute([':studentID' => $studentID, ':semesterName' => $semesterName]);
     $existing = $check->fetch(PDO::FETCH_ASSOC);
