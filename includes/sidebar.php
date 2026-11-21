@@ -22,6 +22,33 @@ if (isset($_SESSION['studentID'])) {
         $hasSemesterPlan = true;
     }
 }
+
+$sidebarAvatarThemes = [
+    'indigo'  => 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)',
+    'violet'  => 'linear-gradient(135deg, #9333ea 0%, #7c3aed 100%)',
+    'blue'    => 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)',
+    'emerald' => 'linear-gradient(135deg, #10b981 0%, #047857 100%)',
+    'amber'   => 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
+    'rose'    => 'linear-gradient(135deg, #f43f5e 0%, #be123c 100%)',
+    'cyan'    => 'linear-gradient(135deg, #06b6d4 0%, #0e7490 100%)',
+    'slate'   => 'linear-gradient(135deg, #475569 0%, #1e293b 100%)',
+];
+
+// Load from DB once if not yet cached in the current login session
+if (!isset($_SESSION['avatarColor']) && isset($_SESSION['studentID']) && isset($conn)) {
+    try {
+        $sidebarAvStmt = $conn->prepare('SELECT "avatarColor" FROM "Student" WHERE "studentID" = :studentID LIMIT 1');
+        $sidebarAvStmt->execute([':studentID' => $_SESSION['studentID']]);
+        $sidebarSavedColor = $sidebarAvStmt->fetchColumn();
+        $_SESSION['avatarColor'] = ($sidebarSavedColor && isset($sidebarAvatarThemes[$sidebarSavedColor])) ? $sidebarSavedColor : 'indigo';
+    } catch (PDOException $e) {
+        $_SESSION['avatarColor'] = 'indigo';
+    }
+}
+
+$sidebarActiveKey = $_SESSION['avatarColor'] ?? 'indigo';
+$sidebarActiveGradient = $sidebarAvatarThemes[$sidebarActiveKey] ?? $sidebarAvatarThemes['indigo'];
+$sidebarAvatarStyle = "background: {$sidebarActiveGradient}; color: #ffffff;";
 ?>
 <aside class="sidebar">
     <!-- Sidebar Logo Header -->
@@ -121,7 +148,7 @@ if (isset($_SESSION['studentID'])) {
 
     <div class="sidebar-footer">
         <div class="user-profile">
-            <div class="avatar"><i class="ph ph-user"></i></div>
+            <div class="avatar" style="<?= htmlspecialchars($sidebarAvatarStyle) ?>"><i class="ph ph-user"></i></div>
             <div class="user-info">
                 <span class="user-name"><?= htmlspecialchars($userName) ?></span>
                 <span class="user-email"><?= htmlspecialchars($userEmail) ?></span>

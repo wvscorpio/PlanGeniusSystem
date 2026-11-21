@@ -3,7 +3,7 @@ include 'dbConn.php';
 session_start();
 header('Content-Type: application/json');
 
-$studentID = $_SESSION['studentID'] ?? null;
+$studentID =$_SESSION['studentID'] ?? null;
 if (!$studentID) {
     echo json_encode(['success' => false, 'error' => 'Not authenticated']);
     exit;
@@ -37,38 +37,14 @@ $today = new DateTime('today');
 $start = new DateTime($startDate);
 $end = new DateTime($endDate);
 
-if ($start > $end) {
+if ($start >$end) {
     echo json_encode(['success' => false, 'error' => 'Start date must be before or equal to end date']);
     exit;
 }
 
-if (!$force) {
-    if ($start < $today) {
-        echo json_encode(['success' => false, 'error' => 'Semester start date must be today or a future date']);
-        exit;
-    }
-
-    if ($end < $today) {
-        echo json_encode(['success' => false, 'error' => 'Semester end date must be today or a future date']);
-        exit;
-    }
-}
-
-/*try {
-    $latestEndStmt = $conn->prepare('SELECT MAX("endDate") AS latestEndDate FROM "SemesterPlan" WHERE "studentID" = :studentID');
-    $latestEndStmt->execute([':studentID' => $studentID]);
-    $latestEndResult = $latestEndStmt->fetch(PDO::FETCH_ASSOC);
-    $latestEndDate = $latestEndResult['latestEndDate'] ?? null;
-
-    if (!$force && $latestEndDate && $startDate <= $latestEndDate) {
-        echo json_encode(['success' => false, 'error' => 'Semester dates overlap an existing semester. New semester must start after the latest existing semester end date.']);
-        exit;
-    }*/
-
-        try {
-    // REPLACE lines 44-53 with this overlap validation check:
+try {
     if (!$force) {
-        $overlapStmt = $conn->prepare(
+        $overlapStmt =$conn->prepare(
             'SELECT "semesterName" FROM "SemesterPlan" 
              WHERE "studentID" = :studentID 
              AND NOT ("endDate" < :startDate OR "startDate" > :endDate) 
@@ -77,47 +53,42 @@ if (!$force) {
         $overlapStmt->execute([
             ':studentID' => $studentID,
             ':startDate' => $startDate,
-            ':endDate' => $endDate
+            ':endDate'   => $endDate
         ]);
         
-        $overlappingSem = $overlapStmt->fetch(PDO::FETCH_ASSOC);
+        $overlappingSem =$overlapStmt->fetch(PDO::FETCH_ASSOC);
         if ($overlappingSem) {
             echo json_encode([
                 'success' => false, 
-                'error' => 'Semester dates overlap with "' . $overlappingSem['semesterName'] . '". Active semesters cannot overlap.'
+                'error'   => 'Semester dates overlap with "' . $overlappingSem['semesterName'] . '". Semesters cannot overlap.'
             ]);
             exit;
         }
     }
     
-    $check = $conn->prepare('SELECT * FROM "SemesterPlan" WHERE "studentID" = :studentID AND "semesterName" = :semesterName');
-    $check->execute([':studentID' => $studentID, ':semesterName' => $semesterName]);
-    $existing = $check->fetch(PDO::FETCH_ASSOC);
-
-    if ($existing) {
-        echo json_encode(['success' => false, 'error' => 'This semester already exists.']);
+    $check =$conn->prepare('SELECT 1 FROM "SemesterPlan" WHERE "studentID" = :studentID AND LOWER("semesterName") = LOWER(:semesterName) LIMIT 1');
+    $check->execute([':studentID' => $studentID, ':semesterName' =>$semesterName]);
+    if ($check->fetch()) {
+        echo json_encode(['success' => false, 'error' => 'A semester with this name already exists.']);
         exit;
     }
 
-    $stmt = $conn->prepare(
-        'INSERT INTO "SemesterPlan" ("studentID", "semesterName", "startDate", "endDate") VALUES (:studentID, :semesterName, :startDate, :endDate)'
+    $stmt =$conn->prepare(
+        'INSERT INTO "SemesterPlan" ("studentID", "semesterName", "startDate", "endDate") 
+         VALUES (:studentID, :semesterName, :startDate, :endDate) 
+         RETURNING "semesterID"'
     );
     $stmt->execute([
-        ':studentID' => $studentID,
+        ':studentID'    => $studentID,
         ':semesterName' => $semesterName,
-        ':startDate' => $startDate,
-        ':endDate' => $endDate
+        ':startDate'    => $startDate,
+        ':endDate'      => $endDate
     ]);
 
-    $semesterID = $conn->lastInsertId();
-    $status = 'Upcoming';
-    $today = new DateTime('today');
-    $start = new DateTime($startDate);
-    $end = new DateTime($endDate);
-    if ($today < $start) {
-        $status = 'Upcoming';
-    } elseif ($today > $end) {
-        $status = 'Inactive';
+    $semesterID = (int)$stmt->fetchColumn();
+
+    if ($today < $start) {$status = 'Upcoming';
+    } elseif ($today > $end) {$status = 'Inactive';
     } else {
         $status = 'Active';
     }
@@ -125,12 +96,12 @@ if (!$force) {
     echo json_encode([
         'success' => true,
         'semester' => [
-            'semesterID' => $semesterID,
+            'semesterID'   => $semesterID,
             'semesterName' => $semesterName,
-            'startDate' => $startDate,
-            'endDate' => $endDate,
-            'status' => $status,
-            'courses' => []
+            'startDate'    => $startDate,
+            'endDate'      => $endDate,
+            'status'       => $status,
+            'courses'      => []
         ]
     ]);
     exit;
