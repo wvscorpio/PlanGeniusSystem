@@ -2,7 +2,6 @@
 include 'dbConn.php';
 session_start();
 
-// If already logged in, redirect to dashboard
 if (isset($_SESSION['studentID'])) {
     header('Location: dashboard.php');
     exit;
@@ -67,7 +66,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $normalizedAnswer = strtolower($securityAnswer);
 
                 if ($user && !empty($user['security_answer']) && password_verify($normalizedAnswer, $user['security_answer'])) {
-                    // Security answer matches -> Hash the new password and update the database
                     $hashedPassword = password_hash($newPassword, PASSWORD_DEFAULT);
                     $updateStmt = $conn->prepare('UPDATE "Student" SET "password" = :password, "api_token" = NULL, "api_token_expires_at" = NULL WHERE "email" = :email');
                     $updateStmt->execute([
@@ -79,7 +77,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     header('Location: login.php');
                     exit;
                 } else {
-                    // Generic error message without revealing correct details
                     $message = 'Verification failed. Incorrect security answer.';
                     $step = 2;
                 }
@@ -96,153 +93,191 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Forgot Password - PlanGenius</title>
+  <title>Forgot Password — PlanGenius</title>
+  <link rel="stylesheet" href="css/auth.css">
   <script src="https://unpkg.com/@phosphor-icons/web"></script>
-  <style>
-    :root{
-      --bg1:#e9f0ff;
-      --bg2:#f6fbff;
-      --accent:#5b3bff;
-      --muted:#efefef;
-      --card:#ffffff;
-      --black:#03010a;
-    }
-    html,body{
-      height:100%;margin:0;font-family:'Poppins',system-ui,-apple-system,Segoe UI,Roboto,'Helvetica Neue',Arial;
-    }
-    body{
-      display:flex;align-items:center;justify-content:center;
-      background:linear-gradient(180deg,var(--bg1),var(--bg2));
-      padding:40px;
-    }
-    .wrap{
-      width:520px;max-width:94%;background:var(--card);border-radius:16px;padding:34px;box-shadow:0 6px 20px rgba(38,61,91,0.08);
-    }
-    .brand{ 
-      text-align:center;margin-bottom:8px; 
-    }
-    .brand h1{ 
-      margin:0;font-size:36px;color:var(--accent);font-weight:700; 
-    }
-    .brand p{ 
-      margin:4px 0 20px;color:#7b7f87;font-weight:500 
-    }
-
-    label{
-      display:block;font-weight:600;margin:10px 0 8px;color:#1f2933
-    }
-    .input{
-      width:100%;padding:18px;border-radius:12px;border:none;background:var(--muted);box-sizing:border-box;font-size:15px
-    }
-    .input-readonly{
-      background:#e5e7eb;color:#4b5563;cursor:not-allowed;
-    }
-    .btn{
-      display:block;width:100%;background:var(--black);color:#fff;padding:14px;border-radius:12px;border:none;
-      font-weight:700;font-size:16px;margin-top:18px;cursor:pointer
-    }
-
-    .footer{ 
-      text-align:center;margin-top:16px;color:#9aa0a6;font-size:13px 
-    }
-    .footer a {
-      color: var(--accent);
-      text-decoration: none;
-      font-weight: 600;
-    }
-
-    .toast-container{ position:fixed; top:20px; right:20px; z-index:9999; display:flex; flex-direction:column; gap:10px; align-items:flex-end }
-    .toast{ background:#fff; border-radius:8px; padding:12px 16px; box-shadow:0 6px 18px rgba(20,30,50,0.12); min-width:280px; max-width:380px; color:#0b1720; border-left:6px solid #ccc; display:flex; gap:12px; align-items:flex-start }
-    .toast.success{ border-left-color:#16a34a }
-    .toast.error{ border-left-color:#dc2626 }
-    .toast .close{ margin-left:auto; background:transparent;border:none;color:#667085;font-weight:700;cursor:pointer }
-    .toast .content{ white-space:pre-wrap }
-  </style>
 </head>
-<body>
+<body class="auth-page">
+  <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
-  <div id="toast-container" class="toast-container"></div>
-
-  <div class="wrap"> 
-    
+  <div class="wrap">
     <div class="brand">
-      <h1>PlanGenius</h1>
-      <p><?= $step === 1 ? 'Enter your email to verify identity' : 'Answer your security question to reset password' ?></p>
+      <a href="index.php" class="brand-link" title="Back to Home" aria-label="PlanGenius — Back to Home">
+        <div class="brand-icon">
+          <i class="ph ph-books" style="font-size:22px;"></i>
+        </div>
+        <div class="brand-text">
+          <span class="brand-title">Plan<span>Genius</span></span>
+          <span class="brand-subtitle">Academic Planner</span>
+        </div>
+      </a>
     </div>
-    
+
+    <p class="step-subtitle">
+      <?= $step === 1 ? 'Enter your registered email to verify your identity' : 'Answer your security question to reset your password' ?>
+    </p>
+
     <?php if ($step === 1): ?>
-      <form action="forgot_password.php" method="POST">
+      <form action="" method="POST" onsubmit="handleAuthSubmit(this, 'Verifying...')">
         <input type="hidden" name="action" value="verify_email" />
-        
-        <label for="email">Registered Email</label>
-        <input id="email" name="email" type="email" class="input" placeholder="yourname@example.com" value="<?= htmlspecialchars($email) ?>" required />
-        
+
+        <div class="field-group">
+          <label for="email">Registered Email</label>
+          <input id="email" name="email" type="email" class="input" placeholder="you@example.com" autocomplete="email" value="<?= htmlspecialchars($email) ?>" required autofocus />
+        </div>
+
         <button type="submit" class="btn">Continue</button>
       </form>
     <?php else: ?>
-      <form action="forgot_password.php" method="POST">
+      <form action="" method="POST" onsubmit="handleAuthSubmit(this, 'Resetting password...')">
         <input type="hidden" name="action" value="reset_password" />
         <input type="hidden" name="email" value="<?= htmlspecialchars($email) ?>" />
         <input type="hidden" name="security_question" value="<?= htmlspecialchars($securityQuestion) ?>" />
 
-        <label for="email_display">Registered Email</label>
-        <input id="email_display" type="email" class="input input-readonly" value="<?= htmlspecialchars($email) ?>" readonly />
+        <div class="field-group">
+          <label for="email_display">Registered Email</label>
+          <input id="email_display" type="email" class="input input-readonly" value="<?= htmlspecialchars($email) ?>" readonly />
+        </div>
 
-        <label for="security_question_display">Security Question</label>
-        <input id="security_question_display" type="text" class="input input-readonly" value="<?= htmlspecialchars($securityQuestion) ?>" readonly />
+        <div class="field-group">
+          <label for="security_question_display">Security Question</label>
+          <input id="security_question_display" type="text" class="input input-readonly" value="<?= htmlspecialchars($securityQuestion) ?>" readonly />
+        </div>
 
-        <label for="security_answer">Security Answer</label>
-        <input id="security_answer" name="security_answer" type="text" class="input" placeholder="Enter your secret answer" required autofocus />
+        <div class="field-group">
+          <label for="security_answer">Security Answer</label>
+          <input id="security_answer" name="security_answer" type="text" class="input" placeholder="Enter your secret answer" required autofocus />
+        </div>
 
-        <label for="new_password">New Password</label>
-        <input id="new_password" name="new_password" type="password" class="input" placeholder="••••••••" required />
+        <div class="field-group">
+          <label for="new_password">New Password</label>
+          <div class="password-wrap">
+            <input id="new_password" name="new_password" type="password" class="input" placeholder="Minimum 8 characters" autocomplete="new-password" oninput="updatePasswordStrength(this.value); checkMatch();" required />
+            <button type="button" class="toggle-pw-btn" aria-label="Show password" onclick="togglePasswordVisibility('new_password', this)">
+              <i class="ph ph-eye"></i>
+            </button>
+          </div>
+          <div class="pw-meter-wrap">
+            <div class="pw-bars">
+              <div class="pw-bar" id="pw-bar-1"></div>
+              <div class="pw-bar" id="pw-bar-2"></div>
+              <div class="pw-bar" id="pw-bar-3"></div>
+              <div class="pw-bar" id="pw-bar-4"></div>
+            </div>
+            <div class="pw-hint">
+              <span id="pw-length-hint">At least 8 characters</span>
+              <span id="pw-strength-label" style="font-weight:600;"></span>
+            </div>
+          </div>
+        </div>
 
-        <label for="confirm_password">Confirm New Password</label>
-        <input id="confirm_password" name="confirm_password" type="password" class="input" placeholder="••••••••" required />
-        
+        <div class="field-group">
+          <label for="confirm_password">Confirm New Password</label>
+          <div class="password-wrap">
+            <input id="confirm_password" name="confirm_password" type="password" class="input" placeholder="Re-enter new password" autocomplete="new-password" oninput="checkMatch()" required />
+            <button type="button" class="toggle-pw-btn" aria-label="Show password" onclick="togglePasswordVisibility('confirm_password', this)">
+              <i class="ph ph-eye"></i>
+            </button>
+          </div>
+          <div class="pw-hint" style="margin-top:6px;">
+            <span id="pw-match-hint"></span>
+          </div>
+        </div>
+
         <button type="submit" class="btn">Reset Password</button>
       </form>
     <?php endif; ?>
 
-    <div class="footer">Remembered your password? <a href="login.php">Back to Login</a></div>
+    <div class="footer">
+      <a href="login.php"><i class="ph ph-arrow-left"></i> Back to Login</a>
+    </div>
   </div>
 
   <script>
     const serverMessage = <?php echo json_encode($message); ?>;
 
-    function createToast(type, html) {
+    function togglePasswordVisibility(inputId, btn) {
+      const input = document.getElementById(inputId);
+      const icon = btn.querySelector('i');
+      if (!input) return;
+      const isHidden = input.type === 'password';
+      input.type = isHidden ? 'text' : 'password';
+      btn.setAttribute('aria-label', isHidden ? 'Hide password' : 'Show password');
+      if (icon) icon.className = isHidden ? 'ph ph-eye-slash' : 'ph ph-eye';
+    }
+
+    function updatePasswordStrength(pw) {
+      let score = 0;
+      if (pw.length >= 8) score++;
+      if (/[A-Z]/.test(pw) && /[a-z]/.test(pw)) score++;
+      if (/\d/.test(pw)) score++;
+      if (/[^A-Za-z0-9]/.test(pw)) score++;
+
+      const colors = ['#ef4444', '#f59e0b', '#3b82f6', '#10b981'];
+      const labels = ['Weak', 'Fair', 'Good', 'Strong'];
+
+      for (let i = 1; i <= 4; i++) {
+        const bar = document.getElementById('pw-bar-' + i);
+        if (bar) bar.style.backgroundColor = (pw.length > 0 && i <= score) ? colors[score - 1] : '#e2e8f0';
+      }
+
+      const lenHint = document.getElementById('pw-length-hint');
+      const labelEl = document.getElementById('pw-strength-label');
+      if (lenHint) {
+        lenHint.textContent = pw.length >= 8 ? '✓ 8+ characters met' : `At least 8 characters (${pw.length}/8)`;
+        lenHint.style.color = pw.length >= 8 ? '#059669' : '#64748b';
+      }
+      if (labelEl) {
+        labelEl.textContent = pw.length > 0 ? labels[Math.max(0, score - 1)] : '';
+        labelEl.style.color = pw.length > 0 ? colors[Math.max(0, score - 1)] : '#64748b';
+      }
+    }
+
+    function checkMatch() {
+      const pw = document.getElementById('new_password')?.value || '';
+      const confirm = document.getElementById('confirm_password')?.value || '';
+      const hint = document.getElementById('pw-match-hint');
+      if (!hint) return;
+      if (!confirm) {
+        hint.textContent = '';
+      } else if (pw === confirm) {
+        hint.textContent = '✓ Passwords match';
+        hint.style.color = '#059669';
+      } else {
+        hint.textContent = 'Passwords do not match';
+        hint.style.color = '#dc2626';
+      }
+    }
+
+    function handleAuthSubmit(form, loadingText) {
+      const btn = form.querySelector('button[type="submit"]');
+      if (btn) {
+        btn.innerText = loadingText;
+        btn.disabled = true;
+      }
+    }
+
+    function createToast(type, text) {
       const container = document.getElementById('toast-container');
       if (!container) return;
       const t = document.createElement('div');
       t.className = 'toast ' + (type === 'success' ? 'success' : 'error');
       const content = document.createElement('div');
       content.className = 'content';
-      content.innerHTML = html;
+      content.textContent = text;
       const close = document.createElement('button');
       close.className = 'close';
       close.innerText = '×';
-      close.onclick = () => { t.remove(); };
+      close.onclick = () => t.remove();
       t.appendChild(content);
       t.appendChild(close);
       container.appendChild(t);
-      setTimeout(() => { t.remove(); }, 5000);
+      setTimeout(() => t.remove(), 5000);
     }
 
     document.addEventListener('DOMContentLoaded', () => {
-      if (serverMessage) {
-        createToast('error', escapeHtml(serverMessage));
-      }
+      if (serverMessage) createToast('error', serverMessage);
     });
-
-    function escapeHtml(str) {
-      if (!str) return '';
-      return String(str)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;');
-    }
   </script>
 </body>
 </html>
