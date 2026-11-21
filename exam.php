@@ -247,7 +247,7 @@ try {
         $activeSemesterName = $activeSem['semesterName'];
         
         $courseStmt = $conn->prepare('
-            SELECT "courseID", "courseCode", "courseName"
+            SELECT "courseID", "courseCode", "courseName", "section"
             FROM "Course"
             WHERE "semesterID" = :semesterID
             ORDER BY "courseCode" ASC
@@ -317,7 +317,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && strpos($_SERVER['CONTENT_TYPE'] ?? 
                 }
 
                 $cCheck = $conn->prepare('
-                    SELECT c."courseCode", c."courseName", s."startDate", s."endDate" 
+                    SELECT c."courseCode", c."courseName", c."section", s."startDate", s."endDate" 
                     FROM "Course" c
                     JOIN "SemesterPlan" s ON c."semesterID" = s."semesterID"
                     WHERE c."courseID" = :courseID AND s."studentID" = :studentID
@@ -327,6 +327,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && strpos($_SERVER['CONTENT_TYPE'] ?? 
                 $cCheck->closeCursor();
 
                 if (!$cData) continue;
+
+                // Always use the section from Academic Structure if available
+                if (!empty(trim($cData['section'] ?? ''))) {
+                    $section = trim($cData['section']);
+                }
 
                 // Time Conflict and 30-Minute Buffer Validation against existing exams
                 if (!empty($examTime)) {
@@ -1090,101 +1095,6 @@ try {
     <title>Exam Management - PlanGenius</title>
     <link rel="stylesheet" href="css/style.css">
     <script src="https://unpkg.com/@phosphor-icons/web"></script>
-    <style>
-        .filter-menu { display: flex; gap: 10px; margin-bottom: 20px; overflow-x: auto; padding-bottom: 5px; }
-        .filter-pill { padding: 8px 16px; border-radius: 20px; font-size: 14px; font-weight: 500; cursor: pointer; background: #f1f5f9; color: #475569; border: 1px solid transparent; transition: all 0.2s ease; white-space: nowrap; }
-        .filter-pill:hover { background: #e2e8f0; }
-        .filter-pill.active { background: #3b82f6; color: white; border-color: #2563eb; }
-
-        .course-group { margin-bottom: 30px; }
-        .course-group-title { font-size: 18px; font-weight: 700; color: #1e293b; padding-bottom: 10px; margin-bottom: 15px; border-bottom: 2px solid #e2e8f0; }
-        
-        .exam-item { background-color: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; margin-bottom: 16px; transition: all 0.3s ease; display: block; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
-        .exam-item:hover { box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08); transform: translateY(-1px); }
-        
-        .completed-card { background-color: #f8fafc; border-color: #cbd5e1; opacity: 0.85; }
-        .completed-card .exam-title { text-decoration: line-through; color: #94a3b8; }
-        
-        .past-due-card { background-color: #fff5f5; border-color: #fca5a5; }
-        .past-due-card .exam-title { color: #991b1b; }
-
-        .badge-status-not-started { background-color: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; }
-        .badge-status-ongoing { background-color: #dbeafe; color: #1d4ed8; border: 1px solid #93c5fd; }
-        .badge-status-completed { background-color: #d1fae5; color: #047857; border: 1px solid #6ee7b7; }
-        .badge-status-past-due { background-color: #fee2e2; color: #dc2626; border: 1px solid #fca5a5; }
-        
-        .badge-easy { background: #dcfce7; color: #15803d; border: 1px solid #86efac; }
-        .badge-medium { background: #fef3c7; color: #b45309; border: 1px solid #fde047; }
-        .badge-hard { background: #fee2e2; color: #b91c1c; border: 1px solid #fca5a5; }
-
-        .completed-section-title { font-size: 18px; font-weight: 700; color: #64748b; margin-bottom: 20px; display: flex; align-items: center; gap: 8px; padding-bottom: 10px; border-bottom: 2px dashed #e2e8f0; }
-
-        .exam-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
-        .main-checkbox { width: 22px; height: 22px; cursor: pointer; accent-color: #10b981; margin-top: 2px; flex-shrink: 0; }
-        .exam-info { flex: 1; }
-        .exam-title { font-size: 16px; font-weight: 600; margin-bottom: 4px; transition: all 0.3s ease; color: #0f172a; }
-        .exam-meta { font-size: 13px; color: #64748b; margin-bottom: 8px; display: flex; flex-wrap: wrap; gap: 12px; }
-        .exam-badges { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
-        
-        .exam-actions { display: flex; gap: 8px; margin-left: 16px; }
-        .exam-actions button, .exam-actions a { padding: 8px; border: none; background: none; cursor: pointer; color: #64748b; font-size: 18px; text-decoration: none; border-radius: 6px; transition: all 0.2s ease; }
-        .exam-actions button:hover, .exam-actions a:hover { color: #0f172a; background: #f1f5f9; }
-        
-        .subtasks-container { margin-top: 15px; border-top: 1px dashed #e2e8f0; padding-top: 15px; }
-        .progress-wrapper { margin-bottom: 15px; }
-        .progress-text { display: flex; justify-content: space-between; font-size: 12px; color: #64748b; margin-bottom: 6px; font-weight: 500; }
-        .progress-track { width: 100%; height: 6px; background: #f1f5f9; border-radius: 4px; overflow: hidden; }
-        .progress-fill { height: 100%; background: #10b981; transition: width 0.4s ease; }
-        .subtask-list { display: flex; flex-direction: column; gap: 8px; }
-        .subtask-item { display: flex; align-items: flex-start; gap: 10px; font-size: 14px; cursor: pointer; color: #334155; }
-        .subtask-item input[type="checkbox"] { margin-top: 3px; accent-color: #10b981; cursor: pointer; width: 16px; height: 16px; }
-
-        .toggle-subtasks-btn { margin-top: 10px; background: none; border: none; color: #2563eb; font-size: 13px; font-weight: 600; cursor: pointer; padding: 0; display: inline-flex; align-items: center; gap: 4px; }
-        .toggle-subtasks-btn:hover { text-decoration: underline; }
-
-        /* Assessment Card Types */
-        .assessment-card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-top: 10px; }
-        .assessment-select-card { background: #ffffff; border: 2px solid #e2e8f0; border-radius: 12px; padding: 20px; text-align: center; cursor: pointer; transition: all 0.25s ease; position: relative; }
-        .assessment-select-card:hover { border-color: #3b82f6; transform: translateY(-3px); box-shadow: 0 10px 15px -3px rgba(59, 130, 246, 0.1); }
-        .assessment-icon-wrapper { width: 50px; height: 50px; border-radius: 12px; display: flex; align-items: center; justify-content: center; margin: 0 auto 12px auto; font-size: 24px; }
-        .assessment-select-card.final-exam .assessment-icon-wrapper { background: #eff6ff; color: #2563eb; }
-        .assessment-select-card.quiz .assessment-icon-wrapper { background: #f0fdf4; color: #16a34a; }
-        .assessment-select-card.test .assessment-icon-wrapper { background: #faf5ff; color: #9333ea; }
-        .assessment-card-title { font-size: 16px; font-weight: 700; color: #1e293b; margin-bottom: 4px; }
-        .assessment-card-subtitle { font-size: 12px; color: #64748b; }
-
-        /* Course Selector Cards Grid */
-        .course-card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; margin: 16px 0; }
-        .course-select-card { background: #fff; border: 2px solid #e2e8f0; border-radius: 10px; padding: 16px; cursor: pointer; transition: all 0.2s ease; user-select: none; position: relative; }
-        .course-select-card:hover { border-color: #94a3b8; }
-        .course-select-card.selected { border-color: #2563eb; background: #eff6ff; }
-        .course-card-status { position: absolute; top: 12px; right: 12px; font-size: 14px; font-weight: 700; color: #cbd5e1; }
-        .course-select-card.selected .course-card-status { color: #2563eb; }
-        .course-card-code { font-size: 15px; font-weight: 700; color: #1e293b; margin-bottom: 4px; }
-        .course-card-name { font-size: 13px; color: #64748b; line-height: 1.3; }
-
-        .drop-zone { border: 2px dashed #cbd5e1; border-radius: 8px; padding: 30px 20px; text-align: center; cursor: pointer; transition: all 0.3s ease; background: #f8fafc; }
-        .drop-zone:hover { background: #f1f5f9; border-color: #3b82f6; }
-
-        /* Extracted Exam Form Row */
-        .extracted-exam-card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 16px; margin-bottom: 16px; }
-        .extracted-exam-header { font-size: 15px; font-weight: 700; color: #1e293b; margin-bottom: 10px; border-bottom: 1px solid #cbd5e1; padding-bottom: 6px; }
-        .extracted-exam-details { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; font-size: 13px; color: #475569; margin-bottom: 12px; }
-        .extracted-exam-details span { display: block; }
-        .extracted-exam-details strong { color: #0f172a; }
-        .extracted-input-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
-
-        /* Progress Bar & Step Colors */
-        .upload-progress-container { margin-top: 20px; }
-        .upload-status-text { display: flex; justify-content: space-between; font-size: 13px; font-weight: 600; margin-bottom: 8px; color: #475569; }
-        .upload-progress-bar { width: 100%; height: 8px; background: #e2e8f0; border-radius: 4px; overflow: hidden; }
-        .upload-progress-fill { height: 100%; background: #3b82f6; width: 0%; transition: width 0.4s ease; }
-
-        .upload-steps-list { margin-top: 15px; display: flex; flex-direction: column; gap: 10px; text-align: left; background: #f8fafc; padding: 16px; border-radius: 10px; border: 1px solid #e2e8f0; }
-        .step-item { font-size: 13px; font-weight: 500; color: #94a3b8; display: flex; align-items: center; gap: 10px; transition: all 0.3s ease; }
-        .step-item.active { color: #2563eb; font-weight: 600; }
-        .step-item.done { color: #16a34a; font-weight: 600; }
-    </style>
 </head>
 <body>
     <?php 
@@ -1194,6 +1104,28 @@ try {
 
     <main class="main-content">
         <?php include 'includes/header.php'; ?>
+
+        <?php
+            // Calculate Summary Metrics for Exams
+            $kpiUpcoming7 = 0;
+            $kpiActiveExams = 0;
+            $kpiOngoingExams = 0;
+            $kpiCompletedExams = 0;
+            $todayExamDt = new DateTime('today');
+
+            foreach ($exams as $exItem) {
+                if ($exItem['examStatus'] === 'Completed') {
+                    $kpiCompletedExams++;
+                } else {
+                    $kpiActiveExams++;
+                    if ($exItem['examStatus'] === 'Ongoing') $kpiOngoingExams++;
+                    $exDt = new DateTime($exItem['examDate']);
+                    if ($exDt >= $todayExamDt && $todayExamDt->diff($exDt)->days <= 7) {
+                        $kpiUpcoming7++;
+                    }
+                }
+            }
+        ?>
 
         <div class="dashboard-container">
             <div class="page-header flex-between">
@@ -1207,19 +1139,70 @@ try {
             </div>
 
             <?php if (count($exams) > 0): ?>
-            <div class="search-container" style="position: relative; margin-bottom: 20px;">
-                <i class="ph ph-magnifying-glass" style="position: absolute; left: 16px; top: 50%; transform: translateY(-50%); color: #94a3b8; font-size: 18px;"></i>
-                <input type="text" id="searchInput" class="form-control" style="padding-left: 44px; border-radius: 999px;" placeholder="Search assessments by course code or title..." oninput="handleSearch(event)">
+            <!-- TOP EXAM OVERVIEW CARDS -->
+            <div class="summary-grid">
+                <div class="summary-card upcoming" onclick="triggerExamFilterByName('High Priority')">
+                    <div class="summary-icon"><i class="ph-fill ph-alarm"></i></div>
+                    <div>
+                        <div class="summary-value"><?= $kpiUpcoming7 ?></div>
+                        <div class="summary-label">Exams Within 7 Days</div>
+                    </div>
+                </div>
+                <div class="summary-card finals" onclick="triggerExamFilterByName('All')">
+                    <div class="summary-icon"><i class="ph-fill ph-graduation-cap"></i></div>
+                    <div>
+                        <div class="summary-value"><?= $kpiActiveExams ?></div>
+                        <div class="summary-label">Active Assessments</div>
+                    </div>
+                </div>
+                <div class="summary-card ongoing" onclick="triggerExamFilterByName('Ongoing')">
+                    <div class="summary-icon"><i class="ph-fill ph-book-open-text"></i></div>
+                    <div>
+                        <div class="summary-value"><?= $kpiOngoingExams ?></div>
+                        <div class="summary-label">Revision Ongoing</div>
+                    </div>
+                </div>
+                <div class="summary-card done" onclick="triggerExamFilterByName('Completed')">
+                    <div class="summary-icon"><i class="ph-fill ph-check-circle"></i></div>
+                    <div>
+                        <div class="summary-value"><?= $kpiCompletedExams ?></div>
+                        <div class="summary-label">Completed</div>
+                    </div>
+                </div>
             </div>
-            <div class="filter-menu">
-                <button class="filter-pill active" onclick="filterTasks('All', this)">All</button>
-                <button class="filter-pill" onclick="filterTasks('Not Started', this)">Not Started</button>
-                <button class="filter-pill" onclick="filterTasks('Ongoing', this)">Ongoing</button>
-                <button class="filter-pill" onclick="filterTasks('Completed', this)">Completed</button>
-                <button class="filter-pill" onclick="filterTasks('Past Due', this)">Past Due</button>
-                <button class="filter-pill" onclick="filterTasks('High Priority', this)">High Priority</button>
-                <button class="filter-pill" onclick="filterTasks('Medium Priority', this)">Medium Priority</button>
-                <button class="filter-pill" onclick="filterTasks('Low Priority', this)">Low Priority</button>
+
+            <!-- ORGANIZED SEARCH & GROUPED FILTERS -->
+            <div class="filter-toolbar-card">
+                <div class="search-row">
+                    <div class="search-input-wrap">
+                        <i class="ph ph-magnifying-glass"></i>
+                        <input type="text" id="searchInput" class="form-control" placeholder="Search assessments by course code, course name, or title..." oninput="handleSearch(event)">
+                    </div>
+                    <button type="button" class="btn-reset-filters" id="resetFiltersBtn" onclick="resetAllFilters()">
+                        <i class="ph-bold ph-arrow-counter-clockwise"></i> Reset Filters
+                    </button>
+                </div>
+
+                <div class="filter-groups-row">
+                    <div class="filter-group" id="statusFilterGroup">
+                        <span class="filter-group-label">Status:</span>
+                        <button class="filter-pill status-pill active" data-status="All" onclick="setStatusFilter('All', this)">All (<?= count($exams) ?>)</button>
+                        <button class="filter-pill status-pill" data-status="Not Started" onclick="setStatusFilter('Not Started', this)">Not Started</button>
+                        <button class="filter-pill status-pill" data-status="Ongoing" onclick="setStatusFilter('Ongoing', this)">Ongoing (<?= $kpiOngoingExams ?>)</button>
+                        <button class="filter-pill status-pill" data-status="Completed" onclick="setStatusFilter('Completed', this)">Completed (<?= $kpiCompletedExams ?>)</button>
+                        <button class="filter-pill status-pill" data-status="Past Due" onclick="setStatusFilter('Past Due', this)">Past Due</button>
+                    </div>
+
+                    <div class="filter-divider"></div>
+
+                    <div class="filter-group" id="priorityFilterGroup">
+                        <span class="filter-group-label">Priority:</span>
+                        <button class="filter-pill priority-pill active" data-priority="All" onclick="setPriorityFilter('All', this)">Any</button>
+                        <button class="filter-pill priority-pill" data-priority="High" onclick="setPriorityFilter('High', this)">High</button>
+                        <button class="filter-pill priority-pill" data-priority="Medium" onclick="setPriorityFilter('Medium', this)">Medium</button>
+                        <button class="filter-pill priority-pill" data-priority="Low" onclick="setPriorityFilter('Low', this)">Low</button>
+                    </div>
+                </div>
             </div>
             <?php endif; ?>
 
@@ -1228,151 +1211,299 @@ try {
                 <span id="emptyStateMessage">No examinations, quizzes, or tests found.</span>
             </div>
 
+            <?php
+                // Build unified per-course folder data with study progress
+                $examFolders = [];
+                foreach ($exams as $ex) {
+                    $cKey = $ex['courseCode'] . ' - ' . $ex['courseName'];
+                    if (!isset($examFolders[$cKey])) {
+                        $examFolders[$cKey] = [
+                            'courseCode'  => $ex['courseCode'],
+                            'courseName'  => $ex['courseName'],
+                            'items'       => [],
+                            'activeCount' => 0,
+                            'doneCount'   => 0,
+                            'nextExam'    => null,
+                            'unitsDone'   => 0,
+                            'unitsTotal'  => 0
+                        ];
+                    }
+                    $examFolders[$cKey]['items'][] = $ex;
+
+                    $tasks = $ex['studyTasks'] ?? [];
+                    if (count($tasks) > 0) {
+                        $examFolders[$cKey]['unitsTotal'] += count($tasks);
+                        foreach ($tasks as $st) {
+                            $isDone = filter_var($st['isCompleted'], FILTER_VALIDATE_BOOLEAN) || $st['isCompleted'] === 't' || $st['isCompleted'] === 'true' || $st['isCompleted'] === 1 || $st['isCompleted'] === '1';
+                            if ($isDone) $examFolders[$cKey]['unitsDone']++;
+                        }
+                    } else {
+                        $examFolders[$cKey]['unitsTotal'] += 1;
+                        if ($ex['examStatus'] === 'Completed') $examFolders[$cKey]['unitsDone'] += 1;
+                    }
+
+                    if ($ex['examStatus'] === 'Completed') {
+                        $examFolders[$cKey]['doneCount']++;
+                    } else {
+                        $examFolders[$cKey]['activeCount']++;
+                        if ($examFolders[$cKey]['nextExam'] === null) {
+                            $examFolders[$cKey]['nextExam'] = $ex['examDate'];
+                        }
+                    }
+                }
+            ?>
+
+            <?php if (!empty($examFolders)): ?>
+            <div class="folder-section-heading">
+                <span><i class="ph-fill ph-folders"></i> Course Exam Folders (Click a folder to view assessments)</span>
+                <span style="font-size: 12px; font-weight: 500; text-transform: none; letter-spacing: 0;">Select any course card below</span>
+            </div>
+
+            <!-- COURSE FOLDER CARDS GRID -->
+            <div class="course-folders-grid" id="courseFoldersGrid">
+                <?php $themeIdx = 0; ?>
+                <?php foreach ($examFolders as $cKey => $folder): ?>
+                    <?php
+                        $slug = 'exam-folder-' . preg_replace('/[^a-zA-Z0-9]/', '-', $folder['courseCode']);
+                        $pct = $folder['unitsTotal'] > 0 ? round(($folder['unitsDone'] / $folder['unitsTotal']) * 100) : 0;
+                        $themeClass = 'folder-theme-' . ($themeIdx % 6);
+                        $themeIdx++;
+                    ?>
+                    <div class="course-folder-card <?= $themeClass ?>"
+                         id="card-<?= $slug ?>"
+                         data-folder-slug="<?= $slug ?>"
+                         data-course-key="<?= htmlspecialchars(strtolower($cKey)) ?>"
+                         onclick="selectCourseFolder('<?= $slug ?>')">
+
+                        <i class="ph-fill ph-graduation-cap folder-watermark-icon"></i>
+
+                        <div>
+                            <div class="folder-card-top">
+                                <span class="folder-code-badge"><?= htmlspecialchars($folder['courseCode']) ?></span>
+                                <span class="folder-card-action" title="Open folder">
+                                    <i class="ph-bold ph-caret-down"></i>
+                                </span>
+                            </div>
+
+                            <h3 class="folder-card-title"><?= htmlspecialchars($folder['courseName']) ?></h3>
+
+                            <div class="folder-card-meta">
+                                <span><?= $folder['activeCount'] ?> Active · <?= $folder['doneCount'] ?> Done</span>
+                                <?php if ($folder['nextExam']): ?>
+                                    <span>· Next: <?= date('M d', strtotime($folder['nextExam'])) ?></span>
+                                <?php endif; ?>
+                            </div>
+                        </div>
+
+                        <div class="folder-progress-area">
+                            <div class="folder-progress-labels">
+                                <span id="folder-pct-<?= $slug ?>"><?= $pct ?>% Ready</span>
+                                <span id="folder-steps-<?= $slug ?>"><?= $folder['unitsDone'] ?>/<?= $folder['unitsTotal'] ?> sessions</span>
+                            </div>
+                            <div class="folder-progress-track">
+                                <div class="folder-progress-fill" id="folder-bar-<?= $slug ?>" style="width: <?= $pct ?>%;"></div>
+                            </div>
+                        </div>
+                    </div>
+                <?php endforeach; ?>
+            </div>
+
+            <!-- OPENED FOLDER EXAMS PANEL -->
             <div id="examsList">
-                <?php foreach (['active' => $activeGrouped, 'completed' => $completedGrouped] as $sectionType => $group): ?>
-                    <?php if (empty($group)) continue; ?>
-                    
-                    <div id="<?= $sectionType === 'active' ? 'activeSection' : 'completedSection' ?>" style="<?= $sectionType === 'completed' ? 'margin-top: 40px;' : '' ?>">
-                        
-                        <?php if ($sectionType === 'completed'): ?>
-                            <div class="completed-section-title"><i class="ph-fill ph-check-circle"></i> Completed Assessments</div>
-                        <?php endif; ?>
+                <?php $themeIdx = 0; ?>
+                <?php foreach ($examFolders as $cKey => $folder): ?>
+                    <?php
+                        $slug = 'exam-folder-' . preg_replace('/[^a-zA-Z0-9]/', '-', $folder['courseCode']);
+                        $themeClass = 'folder-theme-' . ($themeIdx % 6);
+                        $themeIdx++;
+                        usort($folder['items'], function($x, $y) {
+                            $xDone = ($x['examStatus'] === 'Completed') ? 1 : 0;
+                            $yDone = ($y['examStatus'] === 'Completed') ? 1 : 0;
+                            if ($xDone !== $yDone) return $xDone - $yDone;
+                            return strcmp($x['examDate'], $y['examDate']);
+                        });
+                    ?>
+                    <div class="folder-items-drawer course-group" id="panel-<?= $slug ?>" data-folder-slug="<?= $slug ?>" style="display: none;">
+                        <div class="drawer-header">
+                            <div class="drawer-title-wrap">
+                                <span class="drawer-color-dot <?= $themeClass ?>"></span>
+                                <h3 class="drawer-title course-group-title"><?= htmlspecialchars($cKey) ?></h3>
+                                <span class="course-count-pill"><?= count($folder['items']) ?> Total</span>
+                            </div>
+                            <button type="button" class="btn-close-drawer" onclick="closeCourseFolder()">
+                                <i class="ph-bold ph-x"></i> Close Folder
+                            </button>
+                        </div>
 
-                        <?php foreach ($group as $courseHeader => $courseExams): ?>
-                            <div class="course-group">
-                                <h3 class="course-group-title"><i class="ph ph-books"></i> <?= htmlspecialchars($courseHeader) ?></h3>
+                        <?php foreach ($folder['items'] as $exam): ?>
+                            <?php 
+                                $priorityClass = 'badge-priority-' . strtolower($exam['priorityLevel']); 
+                                $parsedTasks = $exam['studyTasks'] ?? [];
+                                $totalTasks = count($parsedTasks);
+                                $completedTasks = 0;
+                                $firstPendingTaskIdx = -1;
+
+                                foreach ($parsedTasks as $idx => $st) {
+                                    $isTaskDone = filter_var($st['isCompleted'], FILTER_VALIDATE_BOOLEAN) || $st['isCompleted'] === 't' || $st['isCompleted'] === 'true' || $st['isCompleted'] === 1 || $st['isCompleted'] === '1';
+                                    if ($isTaskDone) {
+                                        $completedTasks++;
+                                    } elseif ($firstPendingTaskIdx === -1) {
+                                        $firstPendingTaskIdx = $idx;
+                                    }
+                                }
+                                $progressPercent = $totalTasks > 0 ? round(($completedTasks / $totalTasks) * 100) : 0;
+
+                                $isCompleted = ($exam['examStatus'] === 'Completed');
+                                $isPastDue = ($exam['examStatus'] === 'Past Due');
+                                $isFinalExam = (stripos($exam['examType'] ?? '', 'Final') !== false);
+
+                                $exDateObj = new DateTime($exam['examDate']);
+                                $daysToExam = (int)$todayExamDt->diff($exDateObj)->format('%r%a');
+                                if ($isCompleted) {
+                                    $examCountdownLabel = 'Completed';
+                                    $examCountdownClass = 'countdown-exam-done';
+                                } elseif ($daysToExam < 0) {
+                                    $examCountdownLabel = abs($daysToExam) . 'd ago';
+                                    $examCountdownClass = 'countdown-exam-past';
+                                } elseif ($daysToExam === 0) {
+                                    $examCountdownLabel = 'Exam Today!';
+                                    $examCountdownClass = 'countdown-exam-soon';
+                                } elseif ($daysToExam <= 7) {
+                                    $examCountdownLabel = 'In ' . $daysToExam . ($daysToExam === 1 ? ' day' : ' days');
+                                    $examCountdownClass = 'countdown-exam-soon';
+                                } else {
+                                    $examCountdownLabel = 'In ' . $daysToExam . ' days';
+                                    $examCountdownClass = 'countdown-exam-upcoming';
+                                }
+
+                                $statusClass = 'badge-status-not-started';
+                                if ($exam['examStatus'] === 'Ongoing') $statusClass = 'badge-status-ongoing';
+                                elseif ($isCompleted) $statusClass = 'badge-status-completed';
+                                elseif ($isPastDue) $statusClass = 'badge-status-past-due';
                                 
-                                <?php foreach ($courseExams as $exam): ?>
-                                    <?php 
-                                        $priorityClass = 'badge-priority-' . strtolower($exam['priorityLevel']); 
-                                        
-                                        // Process study progress directly from StudyTask records
-                                        $parsedTasks = $exam['studyTasks'] ?? [];
-                                        $totalTasks = count($parsedTasks);
-                                        $completedTasks = 0;
-                                        foreach ($parsedTasks as $st) {
-                                            $isTaskDone = filter_var($st['isCompleted'], FILTER_VALIDATE_BOOLEAN) || $st['isCompleted'] === 't' || $st['isCompleted'] === 'true' || $st['isCompleted'] === 1 || $st['isCompleted'] === '1';
-                                            if ($isTaskDone) {
-                                                $completedTasks++;
+                                $cardClass = 'exam-item';
+                                if ($isCompleted) $cardClass .= ' completed-card';
+                                elseif ($isPastDue) $cardClass .= ' past-due-card';
+                                elseif ($exam['examStatus'] === 'Ongoing') $cardClass .= ' ongoing-card';
+                                elseif ($isFinalExam) $cardClass .= ' exam-final-card';
+                                elseif ($daysToExam >= 0 && $daysToExam <= 7) $cardClass .= ' exam-urgent-card';
+
+                                $diffClass = ($exam['difficultyLevel'] === 'Hard') ? 'badge-hard' : (($exam['difficultyLevel'] === 'Easy') ? 'badge-easy' : 'badge-medium');
+                            ?>
+                            <div class="<?= $cardClass ?>" id="exam-<?= $exam['examID'] ?>" data-priority="<?= htmlspecialchars($exam['priorityLevel']) ?>" data-status="<?= htmlspecialchars($exam['examStatus']) ?>">
+                                <div class="exam-header">
+                                    <input type="checkbox" 
+                                           class="main-checkbox" 
+                                           id="main-exam-checkbox-<?= $exam['examID'] ?>" 
+                                           <?= $isCompleted ? 'checked' : '' ?>
+                                           onchange="toggleMainExamCheckbox(<?= $exam['examID'] ?>, this)"
+                                           title="Mark entire assessment as completed">
+                                    
+                                    <div class="exam-info">
+                                        <?php 
+                                            $examType = $exam['examType'] ?? 'Final';
+                                            $examTitle = $exam['examTitle'] ?? '';
+                                            if (!empty($examTitle)) {
+                                                $displayExamTitle = (stripos($examTitle, $examType) !== false) ? $examTitle : ($examType . ': ' . $examTitle);
+                                            } else {
+                                                $displayExamTitle = $examType;
                                             }
-                                        }
-                                        $progressPercent = $totalTasks > 0 ? round(($completedTasks / $totalTasks) * 100) : 0;
-
-                                        $isCompleted = ($exam['examStatus'] === 'Completed');
-                                        $isPastDue = ($exam['examStatus'] === 'Past Due');
-
-                                        $statusClass = 'badge-status-not-started';
-                                        if ($exam['examStatus'] === 'Ongoing') $statusClass = 'badge-status-ongoing';
-                                        elseif ($isCompleted) $statusClass = 'badge-status-completed';
-                                        elseif ($isPastDue) $statusClass = 'badge-status-past-due';
+                                        ?>
+                                        <div class="exam-title"><?= htmlspecialchars($exam['courseCode']) ?> - <?= htmlspecialchars($displayExamTitle) ?></div>
                                         
-                                        $cardClass = 'exam-item';
-                                        if ($isCompleted) $cardClass .= ' completed-card';
-                                        if ($isPastDue) $cardClass .= ' past-due-card';
-
-                                        $diffClass = ($exam['difficultyLevel'] === 'Hard') ? 'badge-hard' : (($exam['difficultyLevel'] === 'Easy') ? 'badge-easy' : 'badge-medium');
-                                    ?>
-                                    <div class="<?= $cardClass ?>" id="exam-<?= $exam['examID'] ?>" data-priority="<?= htmlspecialchars($exam['priorityLevel']) ?>" data-status="<?= htmlspecialchars($exam['examStatus']) ?>">
-                                        <div class="exam-header">
-                                            <input type="checkbox" 
-                                                   class="main-checkbox" 
-                                                   id="main-exam-checkbox-<?= $exam['examID'] ?>" 
-                                                   <?= $isCompleted ? 'checked' : '' ?>
-                                                   onchange="toggleMainExamCheckbox(<?= $exam['examID'] ?>, this)"
-                                                   title="Mark entire assessment as completed">
-                                            
-                                            <div class="exam-info">
-                                                <?php 
-                                                    $examType = $exam['examType'] ?? 'Final';
-                                                    $examTitle = $exam['examTitle'] ?? '';
-                                                    if (!empty($examTitle)) {
-                                                        $displayExamTitle = (stripos($examTitle, $examType) !== false) ? $examTitle : ($examType . ': ' . $examTitle);
-                                                    } else {
-                                                        $displayExamTitle = $examType;
-                                                    }
-                                                ?>
-                                                <div class="exam-title"><?= htmlspecialchars($exam['courseCode']) ?> - <?= htmlspecialchars($displayExamTitle) ?></div>
-                                                <div class="exam-meta">
-                                                    <span><i class="ph ph-calendar"></i> Date: <?= date('M d, Y', strtotime($exam['examDate'])) ?></span>
-                                                    <?php if(!empty($exam['examTime'])): ?>
-                                                        <span><i class="ph ph-clock"></i> Time: <?= date('g:i A', strtotime($exam['examTime'])) ?><?= !empty($exam['examEndTime']) ? ' - ' . date('g:i A', strtotime($exam['examEndTime'])) : '' ?></span>
-                                                    <?php endif; ?>
-                                                    <?php if(!empty($exam['examLocation'])): ?>
-                                                        <span><i class="ph ph-map-pin"></i> Venue: <?= htmlspecialchars($exam['examLocation']) ?></span>
-                                                    <?php endif; ?>
-                                                </div>
-                                                <div class="exam-badges">
-                                                    <span class="badge badge-type"><?= htmlspecialchars(strtok($exam['examType'] ?? 'Final', ':')) ?></span>
-                                                    <span class="badge <?= $diffClass ?>"><?= htmlspecialchars($exam['difficultyLevel']) ?></span>
-                                                    <span class="badge <?= $priorityClass ?>"><i class="ph ph-warning"></i> <?= htmlspecialchars($exam['priorityLevel']) ?> Priority</span>
-                                                    <span id="exam-status-badge-<?= $exam['examID'] ?>" class="badge <?= $statusClass ?>">
-                                                        <?= htmlspecialchars($exam['examStatus']) ?>
-                                                    </span>
-                                                </div>
-                                            </div>
-                                            <div class="exam-actions">
-                                                <button onclick="openEditAssessmentModal(<?= htmlspecialchars(json_encode($exam), ENT_QUOTES, 'UTF-8') ?>)" title="Edit">
-                                                    <i class="ph ph-pencil-simple"></i>
-                                                </button>
-                                                <button onclick="deleteExam(<?= $exam['examID'] ?>)" title="Delete">
-                                                    <i class="ph ph-trash"></i>
-                                                </button>
-                                            </div>
+                                        <div class="exam-logistics-bar">
+                                            <span class="logistics-chip">
+                                                <i class="ph-bold ph-calendar-blank"></i> <?= date('D, M d, Y', strtotime($exam['examDate'])) ?>
+                                            </span>
+                                            <span class="exam-countdown-pill <?= $examCountdownClass ?>">
+                                                <i class="ph-fill ph-hourglass-medium"></i> <?= $examCountdownLabel ?>
+                                            </span>
+                                            <?php if(!empty($exam['examTime'])): ?>
+                                                <span class="logistics-chip">
+                                                    <i class="ph-bold ph-clock"></i> <?= date('g:i A', strtotime($exam['examTime'])) ?><?= !empty($exam['examEndTime']) ? ' - ' . date('g:i A', strtotime($exam['examEndTime'])) : '' ?>
+                                                </span>
+                                            <?php endif; ?>
+                                            <?php if(!empty($exam['examLocation'])): ?>
+                                                <span class="logistics-chip venue-chip">
+                                                    <i class="ph-fill ph-map-pin"></i> Venue: <?= htmlspecialchars($exam['examLocation']) ?>
+                                                </span>
+                                            <?php endif; ?>
                                         </div>
 
-                                        <!-- STUDY PROGRESS SECTION (POWERED BY STUDYTASK TABLE) -->
-                                        <?php if ($totalTasks > 0): ?>
-                                            <div class="subtasks-container">
-                                                <div class="progress-wrapper">
-                                                    <div class="progress-text">
-                                                        <span>Study Progress: <strong id="progress-count-<?= $exam['examID'] ?>"><?= $completedTasks ?>/<?= $totalTasks ?> completed</strong></span>
-                                                        <span id="progress-text-<?= $exam['examID'] ?>"><?= $progressPercent ?>%</span>
-                                                    </div>
-                                                    <div class="progress-track">
-                                                        <div id="progress-bar-<?= $exam['examID'] ?>" class="progress-fill" style="width: <?= $progressPercent ?>%;"></div>
-                                                    </div>
-                                                </div>
-                                                <div class="subtask-list" id="session-list-<?= $exam['examID'] ?>">
-                                                    <?php foreach ($parsedTasks as $index => $st): ?>
-                                                        <?php 
-                                                            $isExtra = $index >= 5;
-                                                            $displayStyle = $isExtra ? 'display: none;' : '';
-                                                            $extraClass = $isExtra ? ' extra-subtask' : '';
-                                                            $isTaskDone = filter_var($st['isCompleted'], FILTER_VALIDATE_BOOLEAN) || $st['isCompleted'] === 't' || $st['isCompleted'] === 'true' || $st['isCompleted'] === 1 || $st['isCompleted'] === '1';
-                                                            $taskID = (int)$st['studyTaskID'];
-                                                            $schedID = isset($exam['sessions'][$index]['scheduleID']) ? (int)$exam['sessions'][$index]['scheduleID'] : 0;
-                                                        ?>
-                                                        <label class="subtask-item<?= $extraClass ?>" style="<?= $displayStyle ?>">
-                                                            <input type="checkbox" 
-                                                                   data-task-id="<?= $taskID ?>"
-                                                                   onchange="toggleExamStudySession(<?= $exam['examID'] ?>, <?= $taskID ?>, <?= $schedID ?>, this)" 
-                                                                   <?= $isTaskDone ? 'checked' : '' ?>>
-                                                            <span id="session-text-<?= $exam['examID'] ?>-<?= $taskID ?>" 
-                                                                  style="<?= $isTaskDone ? 'text-decoration: line-through; color: #94a3b8;' : '' ?>">
-                                                                <?= htmlspecialchars($st['taskDescription']) ?>
-                                                            </span>
-                                                        </label>
-                                                    <?php endforeach; ?>
-                                                </div>
+                                        <div class="exam-badges">
+                                            <span class="badge badge-type"><?= htmlspecialchars(strtok($exam['examType'] ?? 'Final', ':')) ?></span>
+                                            <span class="badge <?= $diffClass ?>"><?= htmlspecialchars($exam['difficultyLevel']) ?></span>
+                                            <span class="badge <?= $priorityClass ?>"><i class="ph ph-warning"></i> <?= htmlspecialchars($exam['priorityLevel']) ?> Priority</span>
+                                            <span id="exam-status-badge-<?= $exam['examID'] ?>" class="badge <?= $statusClass ?>">
+                                                <?= htmlspecialchars($exam['examStatus']) ?>
+                                            </span>
+                                        </div>
+                                    </div>
+                                    <div class="exam-actions">
+                                        <button onclick="openEditAssessmentModal(<?= htmlspecialchars(json_encode($exam), ENT_QUOTES, 'UTF-8') ?>)" title="Edit">
+                                            <i class="ph ph-pencil-simple"></i>
+                                        </button>
+                                        <button onclick="deleteExam(<?= $exam['examID'] ?>)" title="Delete">
+                                            <i class="ph ph-trash"></i>
+                                        </button>
+                                    </div>
+                                </div>
 
-                                                <?php if ($totalTasks > 5): ?>
-                                                    <button type="button" 
-                                                            class="toggle-subtasks-btn" 
-                                                            data-expanded="false" 
-                                                            onclick="toggleSubtasksVisibility(<?= $exam['examID'] ?>, this)">
-                                                        Show More <i class="ph ph-caret-down"></i>
-                                                    </button>
-                                                <?php endif; ?>
+                                <?php if ($totalTasks > 0): ?>
+                                    <div class="subtasks-container">
+                                        <div class="progress-wrapper">
+                                            <div class="progress-text">
+                                                <span>Study Progress: <strong id="progress-count-<?= $exam['examID'] ?>"><?= $completedTasks ?>/<?= $totalTasks ?> completed</strong></span>
+                                                <span id="progress-text-<?= $exam['examID'] ?>"><?= $progressPercent ?>%</span>
                                             </div>
+                                            <div class="progress-track">
+                                                <div id="progress-bar-<?= $exam['examID'] ?>" class="progress-fill" style="width: <?= $progressPercent ?>%;"></div>
+                                            </div>
+                                        </div>
+                                        <div class="subtask-list" id="session-list-<?= $exam['examID'] ?>">
+                                            <?php foreach ($parsedTasks as $index => $st): ?>
+                                                <?php 
+                                                    $isExtra = $index >= 3;
+                                                    $isTaskDone = filter_var($st['isCompleted'], FILTER_VALIDATE_BOOLEAN) || $st['isCompleted'] === 't' || $st['isCompleted'] === 'true' || $st['isCompleted'] === 1 || $st['isCompleted'] === '1';
+                                                    $isNextSession = (!$isCompleted && $index === $firstPendingTaskIdx);
+                                                    $displayStyle = ($isExtra && !$isNextSession) ? 'display: none;' : '';
+                                                    $extraClass = $isExtra ? ' extra-subtask' : '';
+                                                    $nextSessionClass = $isNextSession ? ' next-session-item' : '';
+                                                    $taskID = (int)$st['studyTaskID'];
+                                                    $schedID = isset($exam['sessions'][$index]['scheduleID']) ? (int)$exam['sessions'][$index]['scheduleID'] : 0;
+                                                ?>
+                                                <label class="subtask-item<?= $extraClass . $nextSessionClass ?>" style="<?= $displayStyle ?>">
+                                                    <input type="checkbox" 
+                                                           data-task-id="<?= $taskID ?>"
+                                                           onchange="toggleExamStudySession(<?= $exam['examID'] ?>, <?= $taskID ?>, <?= $schedID ?>, this)" 
+                                                           <?= $isTaskDone ? 'checked' : '' ?>>
+                                                    <span id="session-text-<?= $exam['examID'] ?>-<?= $taskID ?>" 
+                                                          style="<?= $isTaskDone ? 'text-decoration: line-through; color: #94a3b8;' : '' ?>">
+                                                        <?= htmlspecialchars($st['taskDescription']) ?>
+                                                    </span>
+                                                    <?php if ($isNextSession): ?>
+                                                        <span class="session-tag">Next Session</span>
+                                                    <?php endif; ?>
+                                                </label>
+                                            <?php endforeach; ?>
+                                        </div>
+
+                                        <?php if ($totalTasks > 3): ?>
+                                            <button type="button" 
+                                                    class="toggle-subtasks-btn" 
+                                                    data-expanded="false" 
+                                                    onclick="toggleSubtasksVisibility(<?= $exam['examID'] ?>, this)">
+                                                Show <?= $totalTasks - 3 ?> More Sessions <i class="ph ph-caret-down"></i>
+                                            </button>
                                         <?php endif; ?>
                                     </div>
-                                <?php endforeach; ?>
+                                <?php endif; ?>
                             </div>
                         <?php endforeach; ?>
                     </div>
                 <?php endforeach; ?>
             </div>
-        </div>
+            <?php endif; ?>
 
         <div class="notification-toast" id="notificationToast">
             <i class="ph-fill ph-check-circle"></i> <span id="notificationMessage">Success!</span>
@@ -1426,10 +1557,12 @@ try {
                         <p style="font-size: 13px; color: #94a3b8; grid-column: 1/-1;">No active courses found for the current semester.</p>
                     <?php else: ?>
                         <?php foreach ($activeCourses as $c): ?>
+                            <?php $courseSection = trim($c['section'] ?? ''); ?>
                             <div class="course-select-card selected" 
                                 data-course-id="<?= htmlspecialchars($c['courseID'] ?? $c['courseid'] ?? '') ?>" 
                                 data-course-code="<?= htmlspecialchars($c['courseCode'] ?? $c['coursecode'] ?? '') ?>"
                                 data-course-name="<?= htmlspecialchars($c['courseName'] ?? $c['coursename'] ?? '') ?>"
+                                data-course-section="<?= htmlspecialchars($courseSection) ?>"
                                 onclick="toggleCourseCardSelection(this)">
                                 
                                 <!-- Top Right Icon -->
@@ -1439,9 +1572,8 @@ try {
 
                                 <div class="course-card-code"><?= htmlspecialchars($c['courseCode']) ?></div>
                                 <div class="course-card-name"><?= htmlspecialchars($c['courseName']) ?></div>
-                                <div style="margin-top: 10px;" onclick="event.stopPropagation()">
-                                    <label style="font-size: 11px; font-weight: 700; color: #475569;">Your Section:</label>
-                                    <input type="text" class="course-section-input form-control" placeholder="e.g. 01" style="padding: 4px 8px; font-size: 12px; margin-top: 4px;">
+                                <div style="margin-top: 8px; font-size: 12px; font-weight: 600; color: #2563eb;">
+                                    Section: <?= $courseSection !== '' ? htmlspecialchars($courseSection) : '<span style="color: #94a3b8;">Not set</span>' ?>
                                 </div>
                             </div>
                         <?php endforeach; ?>
@@ -1474,6 +1606,10 @@ try {
                             <div class="step-item" id="examStepVerify"><i class="ph ph-circle"></i> Verifying Courses & Sections...</div>
                             <div class="step-item" id="examStepComplete"><i class="ph ph-circle"></i> Ready for Confirmation</div>
                         </div>
+
+                        <!-- PERSISTENT ERROR & INSTRUCTION BANNER -->
+                        <div id="examExtractionAlert" class="extraction-error-box" style="display: none;"></div>
+
                     </div>
                 </div>
 
@@ -1579,7 +1715,16 @@ try {
             document.getElementById('stepSingleAssessmentForm').style.display = 'none';
             document.getElementById('extractedResultsContainer').style.display = 'none';
             document.getElementById('examDropZone').style.display = 'block';
+            document.getElementById('dropZoneText').innerText = 'Click to upload or drag & drop PDF timetable';
+            document.getElementById('examPdfInput').value = '';
             document.getElementById('examUploadProgress').style.display = 'none';
+            document.getElementById('examProgressBar').style.background = '#3b82f6';
+            document.getElementById('examExtractionAlert').style.display = 'none';
+
+            uploadedPdfPath = '';
+            extractedPdfExams = [];
+
+            document.querySelectorAll('.course-select-card').forEach(c => c.classList.remove('course-missing-error'));
             ['examStepUpload', 'examStepExtract', 'examStepVerify', 'examStepComplete'].forEach(id => updateExamStepStatus(id, 'reset'));
 
             const preferredTimeCard = document.getElementById('preferredTimeCard');
@@ -1684,18 +1829,22 @@ try {
 
         function toggleCourseCardSelection(card) {
             card.classList.toggle('selected');
+            card.classList.remove('course-missing-error');
             const statusIcon = card.querySelector('.course-card-status i');
             
             if (statusIcon) {
                 if (card.classList.contains('selected')) {
-                    // Selected: Green checkmark icon
                     statusIcon.className = 'ph-fill ph-check-circle';
                     statusIcon.style.color = '#16a34a';
                 } else {
-                    // Unselected: Red X-mark icon
                     statusIcon.className = 'ph-fill ph-x-circle';
                     statusIcon.style.color = '#dc2626';
                 }
+            }
+
+            // Re-verify immediately if a PDF has already been extracted
+            if (extractedPdfExams.length > 0) {
+                syncVerificationState();
             }
         }
 
@@ -1709,10 +1858,59 @@ try {
             } else if (status === 'done') {
                 item.className = 'step-item done';
                 if (icon) icon.className = 'ph-fill ph-check-circle';
+            } else if (status === 'error') {
+                item.className = 'step-item error';
+                if (icon) icon.className = 'ph-fill ph-x-circle';
             } else {
                 item.className = 'step-item';
                 if (icon) icon.className = 'ph ph-circle';
             }
+        }
+
+        function syncVerificationState() {
+            const progressBar = document.getElementById('examProgressBar');
+            const percentText = document.getElementById('examProgressPercentText');
+            const statusText = document.getElementById('examProgressStatusText');
+            const dropZone = document.getElementById('examDropZone');
+
+            const isVerified = renderExtractedExamsUI();
+
+            if (isVerified) {
+                updateExamStepStatus('examStepVerify', 'done');
+                updateExamStepStatus('examStepComplete', 'done');
+                statusText.textContent = 'PDF Extracted & Verified Successfully';
+                progressBar.style.background = '#3b82f6';
+                progressBar.style.width = '100%';
+                percentText.textContent = '100%';
+                dropZone.style.display = 'none';
+            } else {
+                updateExamStepStatus('examStepVerify', 'error');
+                updateExamStepStatus('examStepComplete', 'reset');
+                statusText.textContent = 'Verification Incomplete — Action Required';
+                progressBar.style.background = '#dc2626';
+                progressBar.style.width = '75%';
+                percentText.textContent = '75%';
+                // Keep drop zone visible so the user can also re-upload another PDF
+                dropZone.style.display = 'block';
+                document.getElementById('dropZoneText').innerText = 'Click to upload a different PDF timetable';
+                document.getElementById('examPdfInput').value = '';
+            }
+        }
+
+        /**
+         * Normalizes section input and extracted section strings for comparison
+         * Handles numeric zero-padding (e.g. "03" vs "3") and label prefixes (e.g. "Sec 3" vs "3").
+         */
+        function normalizeSection(sec) {
+            if (sec === null || sec === undefined) return '';
+            let str = sec.toString().trim();
+            // Remove explicit label prefixes if entered by the user
+            str = str.replace(/^(section|sec\.?|seksyen|group|kumpulan)\s*/i, '');
+            // Strip leading zeros for numeric sections (e.g., '03' -> '3')
+            if (/^\d+$/.test(str)) {
+                str = parseInt(str, 10).toString();
+            }
+            return str.toUpperCase();
         }
 
         async function handleExamPdfUpload(files) {
@@ -1728,13 +1926,20 @@ try {
             const progressBar = document.getElementById('examProgressBar');
             const percentText = document.getElementById('examProgressPercentText');
             const statusText = document.getElementById('examProgressStatusText');
+            const alertBox = document.getElementById('examExtractionAlert');
 
-            // Hide drop zone & show progress steps
+            // Reset UI state before upload
             dropZone.style.display = 'none';
+            alertBox.style.display = 'none';
+            document.getElementById('extractedResultsContainer').style.display = 'none';
             progressContainer.style.display = 'block';
+            progressBar.style.background = '#3b82f6';
 
             // Step 1: Uploading
             updateExamStepStatus('examStepUpload', 'active');
+            updateExamStepStatus('examStepExtract', 'reset');
+            updateExamStepStatus('examStepVerify', 'reset');
+            updateExamStepStatus('examStepComplete', 'reset');
             statusText.textContent = 'Uploading...';
             progressBar.style.width = '25%';
             percentText.textContent = '25%';
@@ -1760,7 +1965,7 @@ try {
                 progressBar.style.width = '50%';
                 percentText.textContent = '50%';
 
-                await new Promise(r => setTimeout(r, 500));
+                await new Promise(r => setTimeout(r, 400));
 
                 // Step 3: Verifying Courses & Sections
                 updateExamStepStatus('examStepExtract', 'done');
@@ -1772,22 +1977,14 @@ try {
                 uploadedPdfPath = data.filePath || '';
                 extractedPdfExams = data.extractedData || data.exams || [];
 
-                await new Promise(r => setTimeout(r, 500));
+                await new Promise(r => setTimeout(r, 400));
 
-                // Render extracted course cards
-                renderExtractedExamsUI();
-
-                // Step 4: Complete
-                updateExamStepStatus('examStepVerify', 'done');
-                updateExamStepStatus('examStepComplete', 'done');
-                statusText.textContent = 'PDF Extracted Successfully';
-                progressBar.style.width = '100%';
-                percentText.textContent = '100%';
+                // Render extracted course cards & update final step status
+                syncVerificationState();
 
             } catch (err) {
                 showNotification(err.message || 'Error processing PDF', 'error');
                 
-                // Reset view on error
                 dropZone.style.display = 'block';
                 progressContainer.style.display = 'none';
                 document.getElementById('examPdfInput').value = '';
@@ -1795,38 +1992,40 @@ try {
             }
         }
 
-        /**
-         * Normalizes section input and extracted section strings for comparison
-         * Handles numeric zero-padding (e.g. "03" vs "3") and label prefixes (e.g. "Sec 3" vs "3").
-         */
-        function normalizeSection(sec) {
-            if (sec === null || sec === undefined) return '';
-            let str = sec.toString().trim();
-            // Remove explicit label prefixes if entered by the user
-            str = str.replace(/^(section|sec\.?|seksyen|group|kumpulan)\s*/i, '');
-            // Strip leading zeros for numeric sections (e.g., '03' -> '3')
-            if (/^\d+$/.test(str)) {
-                str = parseInt(str, 10).toString();
-            }
-            return str.toUpperCase();
-        }
-
         function renderExtractedExamsUI() {
+            const alertBox = document.getElementById('examExtractionAlert');
+            const container = document.getElementById('extractedExamCardsList');
+            const resultsContainer = document.getElementById('extractedResultsContainer');
+
+            // Clear previous highlights
+            document.querySelectorAll('.course-select-card').forEach(c => c.classList.remove('course-missing-error'));
+            container.innerHTML = '';
+
             const selectedCourseCards = Array.from(document.querySelectorAll('.course-select-card.selected'));
             if (selectedCourseCards.length === 0) {
+                resultsContainer.style.display = 'none';
+                alertBox.innerHTML = `
+                    <strong><i class="ph-fill ph-warning-circle"></i> No Courses Selected</strong>
+                    Please click at least one course card above to include it in the timetable verification.
+                `;
+                alertBox.style.display = 'block';
                 showNotification('Please select at least one active course.', 'error');
-                return;
+                return false;
             }
 
-            const container = document.getElementById('extractedExamCardsList');
-            container.innerHTML = '';
-            let errorFound = false;
+            const errorMessages = [];
 
             for (const card of selectedCourseCards) {
                 const cId = card.getAttribute('data-course-id') || card.dataset.courseId;
                 const cCode = (card.getAttribute('data-course-code') || card.dataset.courseCode || '').trim();
                 const cName = card.getAttribute('data-course-name') || card.dataset.courseName;
-                const sectionInput = (card.querySelector('.course-section-input')?.value || '').trim();
+                const academicSection = (card.getAttribute('data-course-section') || card.dataset.courseSection || '').trim();
+
+                if (!academicSection) {
+                    card.classList.add('course-missing-error');
+                    errorMessages.push(`<b>${cCode}</b>: Section is not set in Academic Structure.`);
+                    continue;
+                }
 
                 const cleanCode = cCode.replace(/[\s-]/g, '').toUpperCase();
 
@@ -1837,40 +2036,32 @@ try {
                     return cleanPdfCourse.includes(cleanCode) || cleanCode.includes(cleanPdfCourse);
                 });
 
-                // 2. Error if Course Code does not exist in the PDF
+                // 2. Collect error if Course Code does not exist in the PDF
                 if (courseMatches.length === 0) {
-                    showNotification(`No examination record found for Course Code ${cCode}.`, 'error');
-                    errorFound = true;
-                    break;
+                    card.classList.add('course-missing-error');
+                    errorMessages.push(`<b>${cCode} (${cName})</b>: Course code not found in the uploaded timetable PDF.`);
+                    continue;
                 }
 
-                let matchedExtracted = null;
+                // 3. Match extracted PDF record based on the Academic Structure section
+                const normAcademicSection = normalizeSection(academicSection);
+                const matchedExtracted = courseMatches.find(e => normalizeSection(e.section) === normAcademicSection);
 
-                // 3. Verify Course Code + Section combination
-                if (sectionInput) {
-                    const normInput = normalizeSection(sectionInput);
-                    matchedExtracted = courseMatches.find(e => normalizeSection(e.section) === normInput);
-
-                    if (!matchedExtracted) {
-                        // Display required error format when course exists but section is missing
-                        showNotification(`No examination record found for Course Code ${cCode}, Section ${sectionInput}.`, 'error');
-                        errorFound = true;
-                        break;
-                    }
-                } else {
-                    // Default to exact section match check if section was provided in extracted row
-                    matchedExtracted = courseMatches[0];
+                if (!matchedExtracted) {
+                    card.classList.add('course-missing-error');
+                    errorMessages.push(`<b>${cCode}</b>: Course found in PDF, but <b>Section ${academicSection}</b> does not match.`);
+                    continue;
                 }
 
                 const dateVal = matchedExtracted.iso_date || matchedExtracted.day || matchedExtracted.date || '';
                 const displayDate = matchedExtracted.display_date || dateVal;
                 const timeVal = matchedExtracted.time_slot || matchedExtracted.time || '09:00 AM - 12:00 PM';
                 const locVal = matchedExtracted.location || 'DK1';
-                const sectionVal = matchedExtracted.section || sectionInput;
+                const safeSection = academicSection.replace(/"/g, '&quot;');
 
                 const cardHtml = `
                     <div class="extracted-exam-card" data-course-id="${cId}">
-                        <div class="extracted-exam-header">${cCode} - ${cName}</div>
+                        <div class="extracted-exam-header">${cCode} - ${cName} (Section ${safeSection})</div>
                         <div class="extracted-exam-details">
                             <span><strong>Date:</strong> ${displayDate ? displayDate : 'Not Found in PDF'}</span>
                             <span><strong>Time:</strong> ${timeVal}</span>
@@ -1882,8 +2073,8 @@ try {
                         
                         <div class="extracted-input-grid" style="grid-template-columns: 1fr 1fr;">
                             <div>
-                                <label style="font-size: 11px; font-weight: 600; color: #475569;">Section</label>
-                                <input type="text" class="form-control ex-section" value="${sectionVal}" readonly style="padding: 6px 10px; font-size: 13px; background-color: #e2e8f0; cursor: not-allowed;">
+                                <label style="font-size: 11px; font-weight: 600; color: #475569;">Section (Academic Structure)</label>
+                                <input type="text" class="form-control ex-section" value="${safeSection}" readonly style="padding: 6px 10px; font-size: 13px; background-color: #e2e8f0; cursor: not-allowed;">
                             </div>
                             <div>
                                 <label style="font-size: 11px; font-weight: 600; color: #475569;">Difficulty</label>
@@ -1899,12 +2090,21 @@ try {
                 container.innerHTML += cardHtml;
             }
 
-            if (!errorFound && container.children.length > 0) {
-                document.getElementById('extractedResultsContainer').style.display = 'block';
-                document.getElementById('dropZoneText').innerText = 'PDF Extracted Successfully';
-            } else {
-                document.getElementById('extractedResultsContainer').style.display = 'none';
+            if (errorMessages.length > 0) {
+                resultsContainer.style.display = 'none';
+                alertBox.innerHTML = `
+                    <strong><i class="ph-fill ph-warning-circle"></i> Unable to Proceed — Timetable Mismatch</strong>
+                    <ul>${errorMessages.map(msg => `<li>${msg}</li>`).join('')}</ul>
+                    <div><strong>How to fix:</strong> Click the highlighted red course card(s) above to deselect courses that do not have a final exam, or upload the correct timetable PDF below.</div>
+                `;
+                alertBox.style.display = 'block';
+                showNotification('Some selected courses were not found in the timetable PDF.', 'error');
+                return false;
             }
+
+            alertBox.style.display = 'none';
+            resultsContainer.style.display = 'block';
+            return true;
         }
 
         async function saveFinalExaminationBatch() {
@@ -2020,6 +2220,43 @@ try {
             }
         }
 
+        // Move "NEXT SESSION" highlight & badge to the first unchecked session
+        function updateNextSessionHighlight(examID) {
+            const list = document.getElementById(`session-list-${examID}`);
+            if (!list) return;
+
+            const exam = existingExams.find(e => e.examID == examID);
+            const isCompleted = exam && exam.examStatus === 'Completed';
+
+            const items = list.querySelectorAll('.subtask-item');
+            let foundNext = false;
+
+            items.forEach((item) => {
+                const checkbox = item.querySelector('input[type="checkbox"]');
+                const existingTag = item.querySelector('.session-tag');
+
+                item.classList.remove('next-session-item');
+                if (existingTag) {
+                    existingTag.remove();
+                }
+
+                if (!isCompleted && !foundNext && checkbox && !checkbox.checked) {
+                    foundNext = true;
+                    item.classList.add('next-session-item');
+
+                    // Keep the new Next Session visible even if extra sessions are collapsed
+                    if (item.style.display === 'none') {
+                        item.style.display = 'flex';
+                    }
+
+                    const tag = document.createElement('span');
+                    tag.className = 'session-tag';
+                    tag.textContent = 'Next Session';
+                    item.appendChild(tag);
+                }
+            });
+        }
+
         // Toggle individual existing StudyTask record
         async function toggleExamStudySession(examID, studyTaskID, scheduleID, checkboxElem) {
             const exam = existingExams.find(e => e.examID == examID);
@@ -2073,6 +2310,9 @@ try {
                 if (pctElem) pctElem.innerText = `${percentage}%`;
                 if (barElem) barElem.style.width = `${percentage}%`;
 
+                // Update the Next Session highlight immediately
+                updateNextSessionHighlight(examID);
+
                 // Update Card & Badge UI
                 const card = document.getElementById(`exam-${examID}`);
                 if (card) {
@@ -2093,9 +2333,14 @@ try {
                 const mainCb = document.getElementById(`main-exam-checkbox-${examID}`);
                 if (mainCb) mainCb.checked = (newStatus === 'Completed');
 
+                if (newStatus === 'Completed') {
+                    showNotification('Assessment marked as completed.', 'success');
+                }
+
             } catch (err) {
                 showNotification(err.message || 'Could not save progress', 'error');
                 checkboxElem.checked = !isCompleted;
+                updateNextSessionHighlight(examID);
             }
         }
 
@@ -2106,6 +2351,7 @@ try {
 
             const isCompleted = checkboxElem.checked;
             const newStatus = isCompleted ? 'Completed' : 'Not Started';
+            exam.examStatus = newStatus;
 
             if (exam.studyTasks && Array.isArray(exam.studyTasks)) {
                 exam.studyTasks.forEach(task => {
@@ -2130,6 +2376,8 @@ try {
                 if (countElem) countElem.innerText = `${completed}/${total} completed`;
                 if (pctElem) pctElem.innerText = `${pct}%`;
                 if (barElem) barElem.style.width = `${pct}%`;
+
+                updateNextSessionHighlight(examID);
             }
 
             const card = document.getElementById(`exam-${examID}`);
@@ -2168,7 +2416,7 @@ try {
             }
         }
 
-        // Expand/Collapse sessions list if greater than 5
+        // Expand/Collapse sessions list if greater than 3
         function toggleSubtasksVisibility(examID, btn) {
             const list = document.getElementById(`session-list-${examID}`);
             if (!list) return;
@@ -2177,12 +2425,17 @@ try {
             const isExpanded = btn.getAttribute('data-expanded') === 'true';
 
             extraSessions.forEach(session => {
-                session.style.display = isExpanded ? 'none' : 'flex';
+                // Keep the active Next Session visible even when collapsing extra sessions
+                if (isExpanded && session.classList.contains('next-session-item')) {
+                    session.style.display = 'flex';
+                } else {
+                    session.style.display = isExpanded ? 'none' : 'flex';
+                }
             });
 
             if (isExpanded) {
                 btn.setAttribute('data-expanded', 'false');
-                btn.innerHTML = 'Show More <i class="ph ph-caret-down"></i>';
+                btn.innerHTML = `Show ${extraSessions.length} More Sessions <i class="ph ph-caret-down"></i>`;
             } else {
                 btn.setAttribute('data-expanded', 'true');
                 btn.innerHTML = 'Show Less <i class="ph ph-caret-up"></i>';
@@ -2220,30 +2473,167 @@ try {
             }
         }
 
-        function handleSearch(e) {
-            const term = e.target.value.toLowerCase();
-            document.querySelectorAll('.exam-item').forEach(item => {
-                const text = item.innerText.toLowerCase();
-                item.style.display = text.includes(term) ? 'block' : 'none';
+        let currentSearchTerm = '';
+        let currentStatusFilter = 'All';
+        let currentPriorityFilter = 'All';
+        let activeFolderSlug = null;
+
+        function selectCourseFolder(slug) {
+            if (activeFolderSlug === slug) {
+                closeCourseFolder();
+                return;
+            }
+            activeFolderSlug = slug;
+
+            document.querySelectorAll('.course-folder-card').forEach(card => {
+                card.classList.toggle('active-folder', card.dataset.folderSlug === slug);
             });
+
+            document.querySelectorAll('.folder-items-drawer').forEach(panel => {
+                panel.style.display = (panel.dataset.folderSlug === slug) ? 'block' : 'none';
+            });
+
+            const activePanel = document.getElementById('panel-' + slug);
+            if (activePanel) {
+                activePanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            }
         }
 
-        function filterTasks(type, btnElement) {
-            document.querySelectorAll('.filter-pill').forEach(b => b.classList.remove('active'));
+        function closeCourseFolder() {
+            activeFolderSlug = null;
+            document.querySelectorAll('.course-folder-card').forEach(c => c.classList.remove('active-folder'));
+            document.querySelectorAll('.folder-items-drawer').forEach(p => p.style.display = 'none');
+        }
+
+        function handleSearch(e) {
+            currentSearchTerm = e.target.value;
+            applyExamFilters();
+        }
+
+        function setStatusFilter(status, btnElement) {
+            document.querySelectorAll('#statusFilterGroup .status-pill').forEach(b => b.classList.remove('active'));
             btnElement.classList.add('active');
+            currentStatusFilter = status;
+            applyExamFilters();
+        }
 
-            document.querySelectorAll('.exam-item').forEach(item => {
-                const status = item.dataset.status;
-                const priority = item.dataset.priority;
+        function setPriorityFilter(priority, btnElement) {
+            document.querySelectorAll('#priorityFilterGroup .priority-pill').forEach(b => b.classList.remove('active'));
+            btnElement.classList.add('active');
+            currentPriorityFilter = priority;
+            applyExamFilters();
+        }
 
-                if (type === 'All') {
-                    item.style.display = 'block';
-                } else if (['Not Started', 'Ongoing', 'Completed', 'Past Due'].includes(type)) {
-                    item.style.display = (status === type) ? 'block' : 'none';
-                } else if (type.includes('Priority')) {
-                    item.style.display = (priority + ' Priority' === type) ? 'block' : 'none';
+        function resetAllFilters() {
+            currentSearchTerm = '';
+            currentStatusFilter = 'All';
+            currentPriorityFilter = 'All';
+            const searchInput = document.getElementById('searchInput');
+            if (searchInput) searchInput.value = '';
+
+            document.querySelectorAll('#statusFilterGroup .status-pill').forEach(b => b.classList.toggle('active', b.dataset.status === 'All'));
+            document.querySelectorAll('#priorityFilterGroup .priority-pill').forEach(b => b.classList.toggle('active', b.dataset.priority === 'All'));
+            closeCourseFolder();
+            applyExamFilters();
+        }
+
+        function triggerExamFilterByName(filterName) {
+            resetAllFilters();
+            if (filterName.includes('Priority')) {
+                const pName = filterName.replace(' Priority', '').trim();
+                const pBtn = document.querySelector(`#priorityFilterGroup .priority-pill[data-priority="${pName}"]`);
+                if (pBtn) setPriorityFilter(pName, pBtn);
+            } else {
+                const sBtn = document.querySelector(`#statusFilterGroup .status-pill[data-status="${filterName}"]`);
+                if (sBtn) setStatusFilter(filterName, sBtn);
+            }
+        }
+
+        function applyExamFilters() {
+            const term = currentSearchTerm.trim().toLowerCase();
+            const isFiltering = (term !== '' || currentStatusFilter !== 'All' || currentPriorityFilter !== 'All');
+
+            const resetBtn = document.getElementById('resetFiltersBtn');
+            if (resetBtn) resetBtn.style.display = isFiltering ? 'inline-flex' : 'none';
+
+            let totalVisibleItems = 0;
+
+            document.querySelectorAll('.folder-items-drawer').forEach(panel => {
+                const slug = panel.dataset.folderSlug;
+                const folderCard = document.getElementById('card-' + slug);
+                const courseHeader = panel.querySelector('.course-group-title').innerText.toLowerCase();
+                let visibleInCourse = 0;
+
+                panel.querySelectorAll('.exam-item').forEach(item => {
+                    const status = item.dataset.status;
+                    const priority = item.dataset.priority;
+
+                    const matchesSearch = (term === '' || courseHeader.includes(term) || item.innerText.toLowerCase().includes(term));
+                    const matchesStatus = (currentStatusFilter === 'All' || status === currentStatusFilter);
+                    const matchesPriority = (currentPriorityFilter === 'All' || priority === currentPriorityFilter);
+
+                    if (matchesSearch && matchesStatus && matchesPriority) {
+                        item.style.display = 'block';
+                        visibleInCourse++;
+                        totalVisibleItems++;
+                    } else {
+                        item.style.display = 'none';
+                    }
+                });
+
+                if (folderCard) {
+                    folderCard.style.display = (isFiltering && visibleInCourse === 0) ? 'none' : 'flex';
+                }
+
+                if (isFiltering) {
+                    panel.style.display = visibleInCourse > 0 ? 'block' : 'none';
+                } else {
+                    panel.style.display = (activeFolderSlug === slug) ? 'block' : 'none';
                 }
             });
+
+            const emptyState = document.getElementById('emptyState');
+            if (emptyState) {
+                emptyState.style.display = totalVisibleItems === 0 ? 'block' : 'none';
+            }
+        }
+
+        function moveExamCardDOM(examID, newStatus) {
+            const card = document.getElementById(`exam-${examID}`);
+            if (!card) return;
+
+            // Keep completed cards at the bottom inside the same course folder drawer
+            const drawer = card.closest('.folder-items-drawer');
+            if (drawer && newStatus === 'Completed') {
+                drawer.appendChild(card);
+            }
+
+            // Live-update the folder card's overall progress bar
+            if (drawer) {
+                const slug = drawer.dataset.folderSlug;
+                const allCards = drawer.querySelectorAll('.exam-item');
+                let unitsTotal = 0;
+                let unitsDone = 0;
+
+                allCards.forEach(item => {
+                    const cbs = item.querySelectorAll('.subtask-list input[type="checkbox"]');
+                    if (cbs.length > 0) {
+                        unitsTotal += cbs.length;
+                        cbs.forEach(cb => { if (cb.checked) unitsDone++; });
+                    } else {
+                        unitsTotal += 1;
+                        if (item.dataset.status === 'Completed') unitsDone += 1;
+                    }
+                });
+
+                const pct = unitsTotal > 0 ? Math.round((unitsDone / unitsTotal) * 100) : 0;
+                const pctEl = document.getElementById('folder-pct-' + slug);
+                const stepsEl = document.getElementById('folder-steps-' + slug);
+                const barEl = document.getElementById('folder-bar-' + slug);
+                if (pctEl) pctEl.innerText = `${pct}% Ready`;
+                if (stepsEl) stepsEl.innerText = `${unitsDone}/${unitsTotal} sessions`;
+                if (barEl) barEl.style.width = `${pct}%`;
+            }
         }
 
         function openModal(id) {
@@ -2312,47 +2702,6 @@ try {
                 }
             } catch (err) {
                 showNotification(err.message || 'Error updating study time', 'error');
-            }
-        }
-
-        function moveExamCardDOM(examID, newStatus) {
-            const card = document.getElementById(`exam-${examID}`);
-            if (!card) return;
-
-            let completedSection = document.getElementById('completedSection');
-            let activeSection = document.getElementById('activeSection');
-
-            if (!completedSection && newStatus === 'Completed') {
-                const examsList = document.getElementById('examsList');
-                completedSection = document.createElement('div');
-                completedSection.id = 'completedSection';
-                completedSection.style.marginTop = '40px';
-                completedSection.innerHTML = `<div class="completed-section-title"><i class="ph-fill ph-check-circle"></i> Completed Assessments</div>`;
-                examsList.appendChild(completedSection);
-            }
-
-            const currentCourseGroup = card.closest('.course-group');
-            const courseTitleText = currentCourseGroup ? currentCourseGroup.querySelector('.course-group-title')?.innerHTML : '';
-
-            const targetSection = (newStatus === 'Completed') ? completedSection : activeSection;
-            if (!targetSection) return;
-
-            let targetCourseGroup = Array.from(targetSection.querySelectorAll('.course-group')).find(cg => {
-                const titleElem = cg.querySelector('.course-group-title');
-                return titleElem && titleElem.innerHTML === courseTitleText;
-            });
-
-            if (!targetCourseGroup) {
-                targetCourseGroup = document.createElement('div');
-                targetCourseGroup.className = 'course-group';
-                targetCourseGroup.innerHTML = `<h3 class="course-group-title">${courseTitleText}</h3>`;
-                targetSection.appendChild(targetCourseGroup);
-            }
-
-            targetCourseGroup.appendChild(card);
-
-            if (currentCourseGroup && currentCourseGroup.querySelectorAll('.exam-item').length === 0) {
-                currentCourseGroup.remove();
             }
         }
 
